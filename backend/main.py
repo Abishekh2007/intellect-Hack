@@ -19,6 +19,7 @@ from routes import (
     database_router,
     health_router,
     sessions_router,
+    queries_router,
 )
 
 settings = get_settings()
@@ -45,6 +46,7 @@ app.include_router(chat_router)
 app.include_router(sessions_router)
 app.include_router(database_router)
 app.include_router(dashboard_router)
+app.include_router(queries_router)
 
 
 @app.get("/")

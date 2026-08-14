@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Database, LayoutDashboard, Loader2, RefreshCw, Share2, Table2, X } from "lucide-react";
+import { Database, LayoutDashboard, Loader2, RefreshCw, Share2, Table2, X, History } from "lucide-react";
 import { toast } from "sonner";
 import {
   api,
@@ -10,8 +10,9 @@ import {
 } from "@/lib/api";
 import { ChartView, DiagramView, IconButton, MarkdownText, TableCard } from "@/components/artifacts";
 import { useApp } from "@/lib/app-state";
+import { QueryHistory } from "./QueryHistory";
 
-type Tab = "schema" | "database" | "dashboard";
+type Tab = "schema" | "database" | "dashboard" | "history";
 
 export function RightPanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("schema");
@@ -42,6 +43,7 @@ export function RightPanel({ onClose }: { onClose: () => void }) {
             ["schema", "Schema", <Table2 key="a" size={13} />],
             ["database", "Database", <Database key="b" size={13} />],
             ["dashboard", "Dashboard", <LayoutDashboard key="c" size={13} />],
+            ["history", "History", <History key="d" size={13} />],
           ] as [Tab, string, React.ReactNode][]
         ).map(([id, label, icon]) => (
           <button
@@ -75,6 +77,7 @@ export function RightPanel({ onClose }: { onClose: () => void }) {
         )}
         {tab === "database" && <DatabaseTab onSchemaChanged={loadSchema} />}
         {tab === "dashboard" && <DashboardTab sessionId={activeSessionId} />}
+        {tab === "history" && <QueryHistory />}
       </div>
     </aside>
   );

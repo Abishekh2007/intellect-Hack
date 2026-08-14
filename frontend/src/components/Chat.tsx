@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, SendHorizonal, Sparkles } from "lucide-react";
+import { Loader2, SendHorizonal, Sparkles, Mic, MicOff } from "lucide-react";
 import { useApp } from "@/lib/app-state";
 import { ChartCard, DiagramCard, MarkdownText, SqlCard, TableCard } from "@/components/artifacts";
 import { Logo } from "@/components/Logo";
-
+import { useSpeechRecognition } from "@/hooks/use-speech";
 const CHIPS = [
   "Top 5 products by revenue",
   "Monthly revenue trend",
@@ -13,10 +13,19 @@ const CHIPS = [
 
 export function Chat() {
   const { thread, isStreaming, statusLabel, toolChip, send, pin, backendOnline } = useApp();
-  const [value, setValue] = useState("");
+  const { isListening, transcript, startListening, stopListening, hasSupport, resetTranscript } = useSpeechRecognition();
+  const [typedValue, setTypedValue] = useState("");
+  const value = (typedValue + (isListening && transcript ? " " + transcript : "")).trim();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!isListening && transcript) {
+      setTypedValue(prev => (prev + " " + transcript).trim());
+      resetTranscript();
+    }
+  }, [isListening, transcript, resetTranscript]);
 
   useEffect(() => {
     if (stickRef.current && scrollRef.current)
@@ -34,7 +43,9 @@ export function Chat() {
     if (!value.trim() || isStreaming) return;
     stickRef.current = true;
     send(value);
-    setValue("");
+    setTypedValue("");
+    resetTranscript();
+    if (isListening) stopListening();
   };
 
   return (
@@ -162,7 +173,10 @@ export function Chat() {
               ref={taRef}
               rows={1}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                if (isListening) stopListening();
+                setTypedValue(e.target.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -172,6 +186,19 @@ export function Chat() {
               placeholder="Ask about your data, e.g. Top 5 products by revenue"
               className="max-h-[150px] flex-1 resize-none bg-transparent py-1.5 text-[15px] outline-none placeholder:text-muted-foreground"
             />
+            {hasSupport && (
+              <button
+                onClick={isListening ? stopListening : startListening}
+                title={isListening ? "Stop listening" : "Start voice input"}
+                className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-150 ${
+                  isListening
+                    ? "bg-destructive text-destructive-foreground animate-pulse"
+                    : "bg-secondary text-secondary-foreground hover:bg-accent"
+                }`}
+              >
+                {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+              </button>
+            )}
             <button
               onClick={submit}
               disabled={isStreaming || !value.trim()}

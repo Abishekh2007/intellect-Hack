@@ -12,9 +12,11 @@ import {
   Terminal,
   Workflow,
   BarChart3,
+  Download,
 } from "lucide-react";
 import { api, type ChartSpec, type DiagramSpec, type QueryResult } from "@/lib/api";
 import { chartPalette, useTheme } from "@/lib/theme";
+import { exportCsv, exportImage, exportPdf } from "@/lib/export-utils";
 
 function CardShell({
   icon,
@@ -200,9 +202,14 @@ export function TableCard({ result, embedded }: { result: QueryResult; embedded?
       icon={<Table2 size={14} />}
       title="Results"
       actions={
-        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
-          {result.row_count ?? rows.length} rows
-        </span>
+        <>
+          <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground mr-1">
+            {result.row_count ?? rows.length} rows
+          </span>
+          <IconButton onClick={() => exportCsv(result.columns ?? [], result.rows ?? [], "table.csv")} title="Export CSV">
+            <Download size={12} /> CSV
+          </IconButton>
+        </>
       }
     >
       {body}
@@ -379,20 +386,32 @@ export function ChartCard({
   onPin?: () => void;
   height?: number;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
   return (
-    <CardShell
-      icon={<BarChart3 size={14} />}
-      title="Chart"
-      actions={
-        onPin ? (
-          <IconButton onClick={onPin} title="Pin to dashboard">
-            <Pin size={12} /> Pin
-          </IconButton>
-        ) : null
-      }
-    >
-      <ChartView spec={spec} {...(height ? { height } : {})} />
-    </CardShell>
+    <div ref={containerRef}>
+      <CardShell
+        icon={<BarChart3 size={14} />}
+        title="Chart"
+        actions={
+          <>
+            <IconButton onClick={() => exportImage(containerRef.current!, "chart.png")} title="Export PNG">
+              <Download size={12} /> PNG
+            </IconButton>
+            <IconButton onClick={() => exportPdf(containerRef.current!, "chart.pdf")} title="Export PDF">
+              <Download size={12} /> PDF
+            </IconButton>
+            {onPin && (
+              <IconButton onClick={onPin} title="Pin to dashboard">
+                <Pin size={12} /> Pin
+              </IconButton>
+            )}
+          </>
+        }
+      >
+        <ChartView spec={spec} {...(height ? { height } : {})} />
+      </CardShell>
+    </div>
   );
 }
 

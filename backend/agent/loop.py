@@ -24,6 +24,7 @@ from llm.rate_limiter import SlidingWindowLimiter
 from memory.conversation_memory import ConversationMemory
 from memory.session_context import SessionScope, get_current_session_id
 from tools.builder import build_registry, default_context
+from store.query_store import log_query
 
 MAX_AGENT_STEPS = 8
 
@@ -173,7 +174,13 @@ class DataPilotAgent:
                 # Capture SQL result for chart follow-through.
                 if call["name"] == "execute_query" and result.get("success"):
                     last_result = tool_payload
-                    yield {"type": "sql", "sql": tool_payload.get("sql", "")}
+                    sql_str = tool_payload.get("sql", "")
+                    if sql_str:
+                        try:
+                            log_query(sql_str)
+                        except Exception:
+                            pass
+                    yield {"type": "sql", "sql": sql_str}
                     yield {
                         "type": "table",
                         "columns": tool_payload.get("columns", []),
