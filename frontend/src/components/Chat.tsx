@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, SendHorizonal, Sparkles, Mic, MicOff } from "lucide-react";
+import { Loader2, SendHorizonal, Mic, MicOff } from "lucide-react";
 import { useApp } from "@/lib/app-state";
 import { ChartCard, DiagramCard, MarkdownText, SqlCard, TableCard } from "@/components/artifacts";
 import { Logo } from "@/components/Logo";
 import { useSpeechRecognition } from "@/hooks/use-speech";
+
 const CHIPS = [
   "Top 5 products by revenue",
   "Monthly revenue trend",
@@ -15,7 +16,7 @@ export function Chat() {
   const { thread, isStreaming, statusLabel, toolChip, send, pin, backendOnline } = useApp();
   const { isListening, transcript, startListening, stopListening, hasSupport, resetTranscript } = useSpeechRecognition();
   const [typedValue, setTypedValue] = useState("");
-  const value = (typedValue + (isListening && transcript ? " " + transcript : "")).trim();
+  const displayValue = typedValue + (isListening && transcript ? " " + transcript : "");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -37,12 +38,13 @@ export function Chat() {
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
-  }, [value]);
+  }, [displayValue]);
 
   const submit = () => {
-    if (!value.trim() || isStreaming) return;
+    const text = displayValue.trim();
+    if (!text || isStreaming) return;
     stickRef.current = true;
-    send(value);
+    send(text);
     setTypedValue("");
     resetTranscript();
     if (isListening) stopListening();
@@ -66,9 +68,9 @@ export function Chat() {
       >
         <div className="mx-auto w-full max-w-3xl px-4 py-6">
           {thread.length === 0 ? (
-            <div className="hero-grid flex min-h-[50vh] flex-col items-center justify-center gap-4 rounded-2xl text-center">
-              <Logo size={48} />
-              <h1 className="text-2xl font-semibold tracking-tight">
+            <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 text-center">
+              <Logo size={36} />
+              <h1 className="text-xl font-semibold tracking-tight">
                 Ask anything about your database
               </h1>
               <p className="max-w-md text-sm text-muted-foreground">
@@ -81,14 +83,14 @@ export function Chat() {
               {thread.map((m) =>
                 m.role === "user" ? (
                   <div key={m.id} className="flex justify-end">
-                    <div className="max-w-[70%] rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-[15px] text-primary-foreground shadow-[var(--shadow-card)]">
+                    <div className="max-w-[75%] rounded-lg bg-secondary px-3.5 py-2 text-[15px] text-secondary-foreground">
                       {m.content}
                     </div>
                   </div>
                 ) : (
                   <div key={m.id} className="flex justify-start">
-                    <div className="w-full max-w-[85%] space-y-3">
-                      <div className="panel px-4 py-3">
+                    <div className="w-full max-w-[92%] space-y-3">
+                      <div className="px-4 py-3 text-[15px] text-foreground">
                         {m.content ? (
                           <MarkdownText>{m.content}</MarkdownText>
                         ) : m.done ? (
@@ -144,7 +146,7 @@ export function Chat() {
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-border bg-surface/60 px-4 py-3 backdrop-blur">
+      <div className="shrink-0 bg-background px-4 py-3">
         <div className="mx-auto w-full max-w-3xl space-y-2">
           {toolChip && (
             <div className="text-[11px] text-info">using tool: {toolChip}</div>
@@ -160,19 +162,18 @@ export function Chat() {
                 <button
                   key={c}
                   onClick={() => send(c)}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-secondary px-3 py-1.5 text-xs text-secondary-foreground transition-colors duration-150 hover:bg-accent"
+                  className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
                 >
-                  <Sparkles size={12} className="text-primary" />
                   {c}
                 </button>
               ))}
             </div>
           )}
-          <div className="panel flex items-end gap-2 px-3 py-2">
+          <div className="flex items-end gap-2 rounded-lg border border-input bg-surface px-3 py-2 focus-within:border-ring">
             <textarea
               ref={taRef}
               rows={1}
-              value={value}
+              value={displayValue}
               onChange={(e) => {
                 if (isListening) stopListening();
                 setTypedValue(e.target.value);
@@ -190,10 +191,10 @@ export function Chat() {
               <button
                 onClick={isListening ? stopListening : startListening}
                 title={isListening ? "Stop listening" : "Start voice input"}
-                className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-150 ${
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors ${
                   isListening
-                    ? "bg-destructive text-destructive-foreground animate-pulse"
-                    : "bg-secondary text-secondary-foreground hover:bg-accent"
+                    ? "bg-destructive text-destructive-foreground"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                 }`}
               >
                 {isListening ? <MicOff size={16} /> : <Mic size={16} />}
@@ -201,9 +202,9 @@ export function Chat() {
             )}
             <button
               onClick={submit}
-              disabled={isStreaming || !value.trim()}
+              disabled={isStreaming || !displayValue.trim()}
               title={backendOnline === false ? "Backend appears offline" : "Send"}
-              className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity duration-150 hover:opacity-90 disabled:opacity-40"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               {isStreaming ? (
                 <Loader2 size={16} className="animate-spin" />

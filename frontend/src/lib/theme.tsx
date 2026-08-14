@@ -27,20 +27,26 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
 export const useTheme = () => useContext(ThemeCtx);
 
+/* A muted categorical set. Ordered so the first colour — the one a single-series
+   bar or line chart uses — is the same restrained accent as the rest of the UI,
+   and the remainder stay distinguishable without shouting. */
 export function chartPalette(theme: Theme) {
   return theme === "dark"
     ? {
-        text: "#cbd5e1",
-        axis: "rgba(148,163,184,0.25)",
-        split: "rgba(148,163,184,0.12)",
-        tooltipBg: "#111c33",
-        series: ["#6366f1", "#8b5cf6", "#14b8a6", "#38bdf8", "#f59e0b", "#f43f5e", "#a78bfa", "#22d3ee"],
+        text: "#a1a1aa",
+        axis: "rgba(161,161,170,0.18)",
+        split: "rgba(161,161,170,0.08)",
+        tooltipBg: "#27272a",
+        // Exported images need a plain hex: canvas cannot fill with oklch().
+        exportBg: "#212326",
+        series: ["#6b93d6", "#7fae9b", "#c2a267", "#b58a8a", "#8f8ab5", "#6fa3a3", "#a89a7c", "#8aa0b8"],
       }
     : {
-        text: "#334155",
-        axis: "rgba(51,65,85,0.25)",
-        split: "rgba(51,65,85,0.1)",
+        text: "#52525b",
+        axis: "rgba(82,82,91,0.2)",
+        split: "rgba(82,82,91,0.09)",
         tooltipBg: "#ffffff",
-        series: ["#6366f1", "#8b5cf6", "#0d9488", "#0284c7", "#d97706", "#e11d48", "#7c3aed", "#0891b2"],
+        exportBg: "#ffffff",
+        series: ["#41689f", "#4f806c", "#8a6d33", "#9c5f5f", "#63608c", "#417070", "#7a6b44", "#5b7085"],
       };
 }

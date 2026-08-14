@@ -23,4 +23,12 @@ def build_registry() -> ToolRegistry:
 
 
 def default_context(settings) -> dict:
-    return {"settings": settings}
+    """Shared context every tool receives.
+
+    ``connection`` decides which database the tools read. It is resolved
+    server-side from the session and deliberately absent from every tool
+    schema, so the model cannot point a query at another database.
+    """
+    from db.connections import demo_connection
+
+    return {"settings": settings, "connection": demo_connection()}

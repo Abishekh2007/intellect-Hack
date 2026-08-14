@@ -35,6 +35,13 @@ export type Schema = { tables: SchemaTable[] };
 
 export type SessionRow = { id: string; title: string; created_at?: string; updated_at?: string };
 
+export type QueryHistoryItem = {
+  id: string;
+  sql: string;
+  is_favorite: boolean;
+  created_at: string;
+};
+
 export type DashboardItem = {
   id: string;
   session_id: string;
@@ -42,6 +49,15 @@ export type DashboardItem = {
   title: string;
   payload: Record<string, unknown>;
   created_at?: string;
+};
+
+export type DbConnection = {
+  id: string;
+  name: string;
+  kind: "sqlite" | "postgres" | string;
+  is_demo: boolean;
+  /* Host and database only — credentials are stripped server-side. */
+  location: string;
 };
 
 export type Artifact =
@@ -88,10 +104,17 @@ async function json<T>(input: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => json<{ status: string }>(HEALTH_URL),
-  schema: () => json<Schema>(`${API_BASE}/schema`),
-  query: (sql: string) =>
-    json<QueryResult>(`${API_BASE}/query`, { method: "POST", body: JSON.stringify({ sql }) }),
+  health: () =>
+    json<{ status: string; database: string; llm_provider: string; app: string }>(HEALTH_URL),
+  schema: (sessionId?: string | null) =>
+    json<Schema>(
+      `${API_BASE}/schema${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    ),
+  query: (sql: string, sessionId?: string | null) =>
+    json<QueryResult>(
+      `${API_BASE}/query${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+      { method: "POST", body: JSON.stringify({ sql }) },
+    ),
   listSessions: () => json<SessionRow[]>(`${API_BASE}/sessions`),
   createSession: (title = "New chat") =>
     json<{ session_id: string; title: string }>(`${API_BASE}/sessions`, {
@@ -144,13 +167,44 @@ export const api = {
     json<{ kind: string; title: string; payload: Record<string, unknown> }>(
       `${API_BASE}/shared/${shareId}`,
     ),
-  uploadDatabase: async (file: File) => {
+  tablePreview: (tableName: string, sessionId?: string | null) =>
+    json<QueryResult>(
+      `${API_BASE}/table-preview/${encodeURIComponent(tableName)}` +
+        (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""),
+    ),
+  listQueries: () => json<QueryHistoryItem[]>(`${API_BASE}/queries`),
+  toggleQueryFavorite: (queryId: string) =>
+    json<{ id: string; is_favorite: boolean }>(`${API_BASE}/queries/${queryId}/favorite`, {
+      method: "POST",
+    }),
+  connections: (sessionId?: string | null) =>
+    json<{ connections: DbConnection[]; active_id: string }>(
+      `${API_BASE}/connections${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    ),
+  addPostgres: (name: string, url: string) =>
+    json<{ connection: DbConnection; server?: string; table_count?: number }>(
+      `${API_BASE}/connections/postgres`,
+      { method: "POST", body: JSON.stringify({ name, url }) },
+    ),
+  removeConnection: (id: string) =>
+    json<{ ok: boolean }>(`${API_BASE}/connections/${id}`, { method: "DELETE" }),
+  useConnection: (sessionId: string, connectionId: string) =>
+    json<{ connection: DbConnection }>(`${API_BASE}/sessions/${sessionId}/connection`, {
+      method: "POST",
+      body: JSON.stringify({ connection_id: connectionId }),
+    }),
+  resetConnection: (sessionId: string) =>
+    json<{ connection: DbConnection }>(`${API_BASE}/sessions/${sessionId}/connection/reset`, {
+      method: "POST",
+    }),
+  uploadDatabase: async (file: File, sessionId?: string | null) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: fd });
+    const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+    const res = await fetch(`${API_BASE}/upload${qs}`, { method: "POST", body: fd });
     const body = await res.json().catch(() => null);
     if (!res.ok) throw new Error(String(body?.detail ?? "Upload failed"));
-    return body as { ok: boolean; database?: string; tables?: string[] };
+    return body as { ok: boolean; connection?: DbConnection; tables?: string[] };
   },
   uploadDataFile: async (file: File) => {
     const fd = new FormData();
@@ -169,11 +223,15 @@ export type SseEvent = {
   answer?: string;
   text?: string;
   label?: string;
+  step?: string;
   name?: string;
   sql?: string;
   columns?: string[];
   rows?: (string | number | null)[][];
   truncated?: boolean;
+  /* `final` carries the turn's artifacts as a bundle so they can be persisted;
+     the streaming `table` event carries columns/rows at the top level. */
+  table?: QueryResult;
   chart?: ChartSpec;
   diagram?: DiagramSpec;
   mode?: string;

@@ -2,27 +2,16 @@ import { useEffect, useState } from "react";
 import { Star, Play, Terminal } from "lucide-react";
 import { IconButton } from "./artifacts";
 import { useApp } from "@/lib/app-state";
-import { api } from "@/lib/api";
-
-interface QueryItem {
-  id: string;
-  sql: string;
-  is_favorite: boolean;
-  created_at: string;
-}
+import { api, type QueryHistoryItem } from "@/lib/api";
 
 export function QueryHistory() {
-  const [queries, setQueries] = useState<QueryItem[]>([]);
+  const [queries, setQueries] = useState<QueryHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const { send } = useApp();
 
   const fetchQueries = async () => {
     try {
-      const res = await fetch(`${api.baseUrl}/queries`);
-      if (res.ok) {
-        const data = await res.json();
-        setQueries(data);
-      }
+      setQueries(await api.listQueries());
     } catch (e) {
       console.error(e);
     } finally {
@@ -40,13 +29,8 @@ export function QueryHistory() {
 
   const toggleFavorite = async (id: string) => {
     try {
-      const res = await fetch(`${api.baseUrl}/queries/${id}/favorite`, { method: "POST" });
-      if (res.ok) {
-        const { is_favorite } = await res.json();
-        setQueries((prev) =>
-          prev.map((q) => (q.id === id ? { ...q, is_favorite } : q))
-        );
-      }
+      const { is_favorite } = await api.toggleQueryFavorite(id);
+      setQueries((prev) => prev.map((q) => (q.id === id ? { ...q, is_favorite } : q)));
     } catch (e) {
       console.error(e);
     }

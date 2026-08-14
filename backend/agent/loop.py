@@ -2,7 +2,8 @@
 
 A hand-written tool-calling loop (deliberately not LangChain/LangGraph) that:
 
-- keeps result rows server-side (the LLM never sees raw rows, only a summary),
+- keeps result rows server-side, handing the model a shape summary plus a
+  short preview and referring to the full set by ``result_id``,
 - bounds iterations to avoid runaway loops,
 - feeds tool errors back so the model can self-correct,
 - falls back to the offline engine if every provider fails or none is set.
@@ -15,8 +16,8 @@ import re
 from typing import Any, AsyncIterator
 
 from config import get_settings
-from db.engine import create_readonly_connection
-from db.schema_discovery import discover_schema, schema_to_prompt
+from db.connections import demo_connection, get_session_connection
+from db.schema_discovery import discover_schema_for, schema_to_prompt
 from llm.base import AllProvidersFailed, ProviderError
 from llm.failover import FailoverProvider, build_providers
 from llm.offline import answer_offline, classify_intent
@@ -24,6 +25,7 @@ from llm.rate_limiter import SlidingWindowLimiter
 from memory.conversation_memory import ConversationMemory
 from memory.session_context import SessionScope, get_current_session_id
 from tools.builder import build_registry, default_context
+from store import result_store, session_store
 from store.query_store import log_query
 
 MAX_AGENT_STEPS = 8
@@ -41,10 +43,13 @@ You have access to tools. Use them in this order when needed:
 Rules:
 - Only generate SELECT queries. The system blocks everything else.
 - If a query fails, read the error and retry with a corrected query (at most twice).
-- When the user asks for a chart, first fetch the data with execute_query, then call generate_chart with those rows.
+- execute_query returns a result_id plus a preview. Pass that result_id to generate_chart and explain_data — never copy rows between tool calls, and never re-type numbers you saw in a preview.
+- When the user asks for a chart, first fetch the data with execute_query, then call generate_chart with the result_id.
+- Let generate_chart pick the chart type. Only set chart_type when the user named one.
 - If asked for an ER diagram, call generate_flowchart with diagram_type='er'.
 - Keep explanations short, useful, and grounded in the data you actually retrieved.
 - If the user greets you or asks about capabilities, just answer conversationally without tools.
+- CRITICAL: After executing a tool like `execute_query` or `generate_chart`, you MUST provide a natural language explanation reasoning about the data returned before finishing. Never leave the user with just a raw chart or table without explaining what it means.
 """
 
 _CONVERSATIONAL_RE = re.compile(
@@ -82,17 +87,49 @@ class DataPilotAgent:
     # --- public entry point: async generator of SSE events ---
     async def stream_turn(self, message: str, session_id: str) -> AsyncIterator[dict[str, Any]]:
         with SessionScope(session_id):
-            memory = self._sessions.setdefault(session_id, ConversationMemory(self.settings.max_history_turns))
+            memory = self._sessions.get(session_id)
+            if memory is None:
+                # Nothing cached: either the process restarted or the user
+                # reloaded into an older conversation. Rebuild from storage so
+                # the agent remembers what the sidebar is already showing.
+                memory = self._hydrate_memory(session_id, message)
+                self._sessions[session_id] = memory
             memory.add_user(message)
             async for event in self._process(message, memory):
                 yield event
+
+    def _hydrate_memory(self, session_id: str, current_message: str) -> ConversationMemory:
+        """Rebuild conversation memory from persisted messages."""
+        memory = ConversationMemory(self.settings.max_history_turns)
+        try:
+            stored = session_store.list_messages(session_id)
+        except Exception:  # noqa: BLE001
+            return memory
+
+        # The chat route persists the question before the turn runs, so the
+        # last row is this turn's message — the caller adds it separately.
+        if stored and stored[-1]["role"] == "user" and stored[-1]["content"] == current_message:
+            stored = stored[:-1]
+
+        for m in stored:
+            content = m.get("content") or ""
+            if m["role"] == "user":
+                memory.add_user(content)
+            elif m["role"] == "assistant":
+                memory.add_assistant(content)
+            # Restore the most recent result so follow-ups still resolve after
+            # a reload. Persisted since the Phase 1 artifact fix.
+            table = (m.get("payload") or {}).get("table")
+            if table and table.get("columns"):
+                memory.set_last_result(table)
+        return memory
 
     async def _process(self, message: str, memory: ConversationMemory) -> AsyncIterator[dict[str, Any]]:
         # 1. Conversational short-circuit (zero LLM/tool cost).
         casual = _is_conversational(message)
         if casual:
             memory.add_assistant(casual)
-            yield {"type": "final", "answer": casual, "sql": None, "chart": None, "diagram": None, "mode": "rule"}
+            yield {"type": "final", "answer": casual, "sql": None, "table": None, "chart": None, "diagram": None, "mode": "rule"}
             return
 
         # 2. Offline engine first (if no providers configured).
@@ -111,29 +148,53 @@ class DataPilotAgent:
 
         # 3. Real agent loop.
         context = default_context(self.settings)
-        context["db_path"] = self.settings.db_path
+        # Whichever database this session is pointed at. Resolved here, not by
+        # the model, and refreshed per turn so a mid-conversation switch takes
+        # effect immediately.
+        connection = get_session_connection(get_current_session_id())
+        context["connection"] = connection
+        context["db_path"] = connection.db_path or self.settings.db_path
+        # generate_chart reads this to spot share-of-total questions, which the
+        # result shape alone cannot express.
+        context["user_message"] = message
+        # explain_data narrates its own computed statistics; give it the same
+        # provider chain the loop uses.
+        context["llm"] = self.failover
 
         # Inject schema into system prompt (refreshed per turn).
-        system_prompt = SYSTEM_PROMPT + "\n\nDATABASE SCHEMA:\n" + self._current_schema_text()
+        yield {"type": "status_step", "step": "inspecting_schema"}
+        system_prompt = (
+            SYSTEM_PROMPT
+            + f"\n\nACTIVE DATABASE: {connection.name} ({connection.kind}). "
+            + f"Write {connection.dialect} SQL.\n\nDATABASE SCHEMA:\n"
+            + self._current_schema_text(connection)
+        )
 
-        messages: list[dict[str, Any]] = []
-        for m in memory.get_messages():
-            messages.append(m)
-        # Re-inject last result so follow-ups resolve.
+        # Re-inject the last result so follow-ups ("chart those", "why?") can
+        # resolve. This rides on the system prompt because that is the one
+        # channel handed to every provider verbatim — a system message placed
+        # in `messages` is dropped during provider conversion.
         if memory.last_result:
             context_text = memory.last_result_context()
             if context_text:
-                messages = messages + [{"role": "system", "content": context_text}]
+                system_prompt += (
+                    "\n\nPREVIOUS RESULT (use this to resolve follow-up questions "
+                    "like \"chart those\" or \"why did it drop?\"):\n" + context_text
+                )
+
+        messages: list[dict[str, Any]] = list(memory.get_messages())
 
         yield {"type": "status", "label": "Thinking..."}
         last_result: dict[str, Any] | None = None
-        tool_calls_total = 0
+        # Artifacts produced this turn. They ride on the `final` event so the
+        # chat route can persist them and a reload can rebuild the answer.
+        artifacts: dict[str, Any] = {"sql": None, "table": None, "chart": None, "diagram": None}
 
         for step in range(MAX_AGENT_STEPS):
-            tool_calls_total += 1
             self.rate_limiter.wait()
 
             try:
+                yield {"type": "status_step", "step": "generating_plan"}
                 provider_events = self.failover.stream_tool_calls(messages, self._tool_specs(), system_prompt)
             except AllProvidersFailed as exc:
                 yield {"type": "error", "message": f"All LLM providers failed: {exc}"}
@@ -162,10 +223,11 @@ class DataPilotAgent:
                     answer = self._fallback_answer(last_result)
                 memory.add_assistant(answer)
                 memory.set_last_result(last_result or {})
-                yield {"type": "final", "answer": answer, "sql": None, "chart": None, "diagram": None, "mode": "agent"}
+                yield self._final(answer, artifacts)
                 return
 
             # Execute tool calls.
+            yield {"type": "status_step", "step": "executing_tools"}
             messages.append({"role": "assistant", "content": full_text, "tool_calls": pending_tool_calls})
             for call in pending_tool_calls:
                 yield {"type": "tool_call", "name": call["name"], "arguments": call.get("arguments", {})}
@@ -173,27 +235,35 @@ class DataPilotAgent:
                 tool_payload = result.get("data", {}) if result.get("success") else result
                 # Capture SQL result for chart follow-through.
                 if call["name"] == "execute_query" and result.get("success"):
-                    last_result = tool_payload
+                    # The model gets the summary; the browser and our own
+                    # bookkeeping get the full rows from the result store.
+                    full = result_store.get(tool_payload.get("result_id", "")) or tool_payload
+                    last_result = full
                     sql_str = tool_payload.get("sql", "")
                     if sql_str:
                         try:
                             log_query(sql_str)
                         except Exception:
                             pass
-                    yield {"type": "sql", "sql": sql_str}
-                    yield {
-                        "type": "table",
-                        "columns": tool_payload.get("columns", []),
-                        "rows": tool_payload.get("rows", []),
-                        "truncated": tool_payload.get("truncated", False),
+                    table = {
+                        "columns": full.get("columns", []),
+                        "rows": full.get("rows", []),
+                        "row_count": full.get("row_count", 0),
+                        "truncated": full.get("truncated", False),
                     }
+                    artifacts["sql"] = sql_str
+                    artifacts["table"] = table
+                    yield {"type": "sql", "sql": sql_str}
+                    yield {"type": "table", **table}
                 elif call["name"] == "generate_chart" and result.get("success"):
                     chart = tool_payload.get("chart")
                     if chart:
+                        artifacts["chart"] = chart
                         yield {"type": "chart", "chart": chart}
                 elif call["name"] == "generate_flowchart" and result.get("success"):
                     diagram = tool_payload
                     if "mermaid" in diagram:
+                        artifacts["diagram"] = diagram
                         yield {"type": "diagram", "diagram": diagram}
                 elif not result.get("success"):
                     yield {"type": "tool_result", "name": call["name"], "error": result.get("error", {})}
@@ -202,6 +272,9 @@ class DataPilotAgent:
                     {
                         "role": "tool",
                         "tool_call_id": call.get("id", ""),
+                        # Gemini keys tool results by function name rather than
+                        # by call id, so both have to travel with the message.
+                        "name": call["name"],
                         "content": json.dumps(tool_payload, default=str),
                     }
                 )
@@ -209,19 +282,33 @@ class DataPilotAgent:
         # Step cap reached without a clean finish.
         answer = self._fallback_answer(last_result) or "I ran out of steps. Please ask a more specific question."
         memory.add_assistant(answer)
-        yield {"type": "final", "answer": answer, "sql": None, "chart": None, "diagram": None, "mode": "agent"}
+        memory.set_last_result(last_result or {})
+        yield self._final(answer, artifacts)
+
+    @staticmethod
+    def _final(answer: str, artifacts: dict[str, Any]) -> dict[str, Any]:
+        """The turn's closing event, carrying everything the turn produced.
+
+        The chat route persists these fields, so anything missing here is lost
+        when the page reloads.
+        """
+        return {
+            "type": "final",
+            "answer": answer,
+            "sql": artifacts.get("sql"),
+            "table": artifacts.get("table"),
+            "chart": artifacts.get("chart"),
+            "diagram": artifacts.get("diagram"),
+            "mode": "agent",
+        }
 
     def _tool_specs(self) -> list[dict[str, Any]]:
         return [t.to_dict() for t in self.registry.all()]
 
-    def _current_schema_text(self) -> str:
+    def _current_schema_text(self, connection=None) -> str:
         try:
-            conn = create_readonly_connection(self.settings.db_path)
-            try:
-                schema = discover_schema(conn)
-            finally:
-                conn.close()
-            return schema_to_prompt(schema)
+            connection = connection or demo_connection()
+            return schema_to_prompt(discover_schema_for(connection))
         except Exception:  # noqa: BLE001
             return "(schema unavailable)"
 

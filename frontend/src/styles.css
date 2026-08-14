@@ -42,57 +42,68 @@
   --color-ring: var(--ring);
   --color-code-bg: var(--code-bg);
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.25), 0 8px 24px oklch(0 0 0 / 0.18);
-  --shadow-glow: 0 0 0 1px oklch(0.58 0.21 285 / 0.35), 0 8px 30px oklch(0.58 0.21 285 / 0.25);
+  /* One soft shadow, used sparingly. No coloured glows. */
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.14);
+  --shadow-glow: 0 1px 2px oklch(0 0 0 / 0.14);
+  --shadow-glow-sm: none;
 }
 
+/*
+ * Plain by intent: near-neutral greys with a single restrained accent, solid
+ * (never translucent) surfaces, and hairline borders instead of glass. Colour
+ * is reserved for meaning — the accent marks what is interactive or active,
+ * and success/warning/destructive carry state. Nothing else is tinted.
+ */
 :root {
-  --radius: 0.75rem;
-  --background: oklch(0.19 0.035 264);
-  --foreground: oklch(0.96 0.008 250);
-  --surface: oklch(0.23 0.038 264);
-  --card: oklch(0.24 0.04 264);
-  --card-foreground: oklch(0.96 0.008 250);
-  --popover: oklch(0.23 0.038 264);
-  --popover-foreground: oklch(0.96 0.008 250);
-  --primary: oklch(0.58 0.21 285);
+  --radius: 0.5rem;
+  --background: oklch(0.17 0.005 260);
+  --foreground: oklch(0.95 0.003 260);
+  --surface: oklch(0.21 0.005 260);
+  --card: oklch(0.21 0.005 260);
+  --card-foreground: oklch(0.95 0.003 260);
+  --popover: oklch(0.22 0.005 260);
+  --popover-foreground: oklch(0.95 0.003 260);
+  --primary: oklch(0.65 0.12 250);
   --primary-foreground: oklch(0.99 0 0);
-  --violet: oklch(0.62 0.2 300);
-  --secondary: oklch(0.28 0.04 264);
-  --secondary-foreground: oklch(0.93 0.01 250);
-  --muted: oklch(0.28 0.038 264);
-  --muted-foreground: oklch(0.71 0.03 256);
-  --accent: oklch(0.32 0.05 274);
-  --accent-foreground: oklch(0.97 0.008 250);
-  --success: oklch(0.72 0.13 180);
-  --destructive: oklch(0.65 0.21 15);
+  --violet: oklch(0.65 0.12 250);
+  --secondary: oklch(0.25 0.005 260);
+  --secondary-foreground: oklch(0.9 0.003 260);
+  --muted: oklch(0.27 0.005 260);
+  --muted-foreground: oklch(0.66 0.006 260);
+  --accent: oklch(0.28 0.006 260);
+  --accent-foreground: oklch(0.95 0.003 260);
+  --success: oklch(0.7 0.11 160);
+  --destructive: oklch(0.63 0.16 25);
   --destructive-foreground: oklch(0.99 0 0);
-  --warning: oklch(0.79 0.15 75);
-  --info: oklch(0.76 0.13 230);
-  --border: oklch(0.75 0.03 256 / 0.16);
-  --input: oklch(0.75 0.03 256 / 0.2);
-  --ring: oklch(0.58 0.21 285);
-  --code-bg: oklch(0.16 0.03 264);
+  --warning: oklch(0.76 0.11 80);
+  --info: oklch(0.72 0.09 235);
+  --border: oklch(0.75 0.01 260 / 0.13);
+  --input: oklch(0.75 0.01 260 / 0.18);
+  --ring: oklch(0.65 0.12 250);
+  --code-bg: oklch(0.15 0.004 260);
 }
 
 .light {
-  --background: oklch(0.98 0.004 250);
-  --foreground: oklch(0.23 0.04 264);
+  --background: oklch(0.99 0.001 260);
+  --foreground: oklch(0.24 0.008 260);
   --surface: oklch(1 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.23 0.04 264);
+  --card-foreground: oklch(0.24 0.008 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.23 0.04 264);
-  --secondary: oklch(0.95 0.008 250);
-  --secondary-foreground: oklch(0.28 0.04 264);
-  --muted: oklch(0.95 0.008 250);
-  --muted-foreground: oklch(0.5 0.03 256);
-  --accent: oklch(0.94 0.02 285);
-  --accent-foreground: oklch(0.3 0.06 285);
-  --border: oklch(0.45 0.03 256 / 0.16);
-  --input: oklch(0.45 0.03 256 / 0.22);
-  --code-bg: oklch(0.96 0.008 250);
+  --popover-foreground: oklch(0.24 0.008 260);
+  --primary: oklch(0.53 0.13 250);
+  --secondary: oklch(0.968 0.002 260);
+  --secondary-foreground: oklch(0.3 0.008 260);
+  --muted: oklch(0.96 0.002 260);
+  --muted-foreground: oklch(0.5 0.008 260);
+  --accent: oklch(0.945 0.003 260);
+  --accent-foreground: oklch(0.24 0.008 260);
+  --border: oklch(0.45 0.01 260 / 0.16);
+  --input: oklch(0.45 0.01 260 / 0.22);
+  --ring: oklch(0.53 0.13 250);
+  --code-bg: oklch(0.972 0.002 260);
 }
 
 @layer base {
@@ -112,36 +123,93 @@
     font-family: var(--font-sans);
     font-size: 14px;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: var(--color-muted);
+    color: var(--color-foreground);
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-thumb {
     background: var(--color-border);
-    border-radius: 8px;
+    border-radius: 999px;
   }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-muted-foreground);
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.04); }
+}
+
+@keyframes typing-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
 }
 
 @utility panel {
   background-color: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
+}
+
+@utility glass {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
 }
 
 @utility hero-grid {
-  background-image: radial-gradient(var(--color-border) 1px, transparent 1px);
-  background-size: 22px 22px;
-  mask-image: radial-gradient(ellipse at center, black, transparent 72%);
+  background-image: none;
 }
 
+/* Kept so existing markup keeps working, but flat: the wordmark and the logo
+   are solid colour now, not a gradient. */
 @utility brand-gradient {
-  background-image: linear-gradient(135deg, var(--color-primary), var(--color-violet));
+  background-color: var(--color-primary);
+}
+
+@utility text-gradient {
+  color: var(--color-foreground);
 }
 
 @utility scroll-thin {
   scrollbar-width: thin;
   overflow-y: auto;
 }
+
+@utility animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+@utility composer-glow {
+  transition: border-color 0.15s ease;
+}
+
+@utility composer-glow-focus {
+  border-color: var(--color-ring);
+}
+
+.typing-dot {
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+

@@ -1,0 +1,65 @@
+# ---------- Secrets ----------
+# Never commit real keys. Copy backend/.env.example to backend/.env instead.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+backend/.env
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- Node / frontend build output ----------
+node_modules/
+dist/
+dist-ssr/
+.output/
+.nitro/
+.vinxi/
+.tanstack/
+.wrangler/
+.dev.vars
+*.local
+
+# ---------- Runtime data ----------
+# SQLite files are generated on first run and re-seeded automatically.
+# Committing them would ship stale demo data and merge-conflict constantly.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+backend/data/
+backend/db/*.db
+uploads/
+
+# ---------- Launcher build ----------
+# DataPilot.exe is committed on purpose so the app is one double-click away
+# without a build step. Only PyInstaller's intermediates are ignored.
+tools/build/
+tools/dist/
+tools/*.spec
+
+# ---------- Logs ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- OS / editor ----------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo

@@ -37,7 +37,13 @@ def messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for m in messages:
         role = m.get("role", "user")
         if role == "system":
-            continue  # system handled separately
+            # The turn's system prompt is passed to providers separately, so a
+            # system message *inside* the history is mid-conversation context.
+            # Carry it as a user turn — dropping it loses information silently.
+            content = m.get("content", "")
+            if content:
+                out.append({"role": "user", "content": f"[context]\n{content}"})
+            continue
         if role == "assistant" and m.get("tool_calls"):
             out.append(
                 {
@@ -57,11 +63,18 @@ def messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
         elif role == "tool":
+            # Tool content arrives already serialized from the agent loop.
+            # Re-encoding it would hand the model an escaped string instead of
+            # an object, at double the tokens.
+            content = m.get("content", "")
             out.append(
                 {
                     "role": "tool",
                     "tool_call_id": m.get("tool_call_id", ""),
-                    "content": json.dumps(m.get("content", {})),
+                    # Carried for providers that key results by function name
+                    # (Gemini); OpenAI-shaped requests drop it before sending.
+                    "name": m.get("name", ""),
+                    "content": content if isinstance(content, str) else json.dumps(content, default=str),
                 }
             )
         else:

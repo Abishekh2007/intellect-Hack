@@ -38,6 +38,9 @@ type AppState = {
   send: (message: string) => Promise<void>;
   pin: (kind: "chart" | "diagram", title: string, payload: Record<string, unknown>) => Promise<void>;
   dashboardVersion: number;
+  /* Bumped when the session switches database, so schema views refetch. */
+  connectionVersion: number;
+  onConnectionChange: () => void;
 };
 
 const Ctx = createContext<AppState | null>(null);
@@ -56,18 +59,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState("Checking…");
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [dashboardVersion, setDashboardVersion] = useState(0);
+  const [connectionVersion, setConnectionVersion] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const titledRef = useRef<Set<string>>(new Set());
 
-  /* health polling */
+  /* health polling — also the source of truth for which engine is answering,
+     so the badge is correct before the first message rather than after it. */
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
       try {
-        await api.health();
-        if (!cancelled) setBackendOnline(true);
+        const h = await api.health();
+        if (cancelled) return;
+        setBackendOnline(true);
+        setMode(h.llm_provider === "configured" ? "AI agent" : "Offline engine");
       } catch {
-        if (!cancelled) setBackendOnline(false);
+        if (!cancelled) {
+          setBackendOnline(false);
+          setMode("Offline");
+        }
       }
     };
     check();
@@ -123,21 +133,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (saved) openSession(saved);
   }, [refreshSessions, openSession]);
 
+  /* Clears the view but does not create anything yet — the session is created
+     with the first message. Creating it up front left an "New chat" row in the
+     sidebar for every click, including the ones the user never used. */
   const newChat = useCallback(async () => {
     abortRef.current?.abort();
     setThread([]);
     setIsStreaming(false);
-    try {
-      const s = await api.createSession("New chat");
-      setActiveSessionId(s.session_id);
-      window.localStorage.setItem(ACTIVE_KEY, s.session_id);
-      await refreshSessions();
-    } catch {
-      setActiveSessionId(null);
-      window.localStorage.removeItem(ACTIVE_KEY);
-      toast.error("Couldn't start a new chat — backend unreachable.");
-    }
-  }, [refreshSessions]);
+    setActiveSessionId(null);
+    window.localStorage.removeItem(ACTIVE_KEY);
+  }, []);
 
   const deleteSession = useCallback(
     async (id: string) => {
@@ -185,10 +190,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       let sessionId = activeSessionId;
       if (!sessionId) {
         try {
-          const s = await api.createSession("New chat");
+          // Title it from the question straight away, so the sidebar never
+          // shows a row called "New chat".
+          const s = await api.createSession(text.slice(0, 40));
           sessionId = s.session_id;
           setActiveSessionId(sessionId);
           window.localStorage.setItem(ACTIVE_KEY, sessionId);
+          titledRef.current.add(sessionId);
         } catch {
           sessionId = null;
         }
@@ -213,7 +221,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           onEvent: (e) => {
             switch (e.type) {
               case "status":
-                setStatusLabel(e.label ?? "thinking");
+              case "status_step":
+                setStatusLabel(e.step ?? e.label ?? "thinking");
                 break;
               case "token":
                 patch((m) => ({ ...m, content: m.content + (e.text ?? "") }));
@@ -273,12 +282,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
                         ? "Rule"
                         : mode,
                 );
-                // Offline mode bundles all artifacts into the final event
-                // (sql/chart/diagram); agent mode streams them separately.
+                // The final event repeats every artifact the turn produced so
+                // the server can persist them. Agent mode has already streamed
+                // them in, so merge rather than append.
                 patch((m) => {
                   const artifacts = [...m.artifacts];
                   if (e.sql && !artifacts.some((a) => a.kind === "sql" && a.sql === e.sql))
                     artifacts.push({ kind: "sql", sql: e.sql });
+                  if (e.table && !artifacts.some((a) => a.kind === "table"))
+                    artifacts.push({ kind: "table", table: e.table });
                   if (e.chart && !artifacts.some((a) => a.kind === "chart"))
                     artifacts.push({ kind: "chart", chart: e.chart as ChartSpec });
                   if (e.diagram && !artifacts.some((a) => a.kind === "diagram"))
@@ -334,6 +346,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [activeSessionId],
   );
 
+  const onConnectionChange = useCallback(() => setConnectionVersion((v) => v + 1), []);
+
   useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
@@ -356,6 +370,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         send,
         pin,
         dashboardVersion,
+        connectionVersion,
+        onConnectionChange,
       }}
     >
       {children}

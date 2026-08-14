@@ -118,3 +118,23 @@ def get_schema_json(settings=None) -> dict[str, Any]:
         return discover_schema(conn)
     finally:
         conn.close()
+
+
+def discover_schema_for(connection) -> dict[str, Any]:
+    """Discover the schema of any supported engine.
+
+    Returns the same JSON shape for every engine, so the ER-diagram builder
+    and the prompt renderer stay engine-agnostic.
+    """
+    from db.connections import POSTGRES_KIND
+
+    if connection.kind == POSTGRES_KIND:
+        from db import postgres
+
+        return postgres.discover_schema(connection.target)
+
+    conn = create_readonly_connection(connection.db_path)
+    try:
+        return discover_schema(conn)
+    finally:
+        conn.close()

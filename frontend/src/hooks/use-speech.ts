@@ -12,10 +12,15 @@ export function useSpeechRecognition() {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [finalTranscript, setFinalTranscript] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Must start false so the server render and the first client render agree.
+  // Reading `window` during render instead makes the mic button appear only on
+  // the client, and React throws away the whole tree on a hydration mismatch.
+  const [hasSupport, setHasSupport] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)) {
+      setHasSupport(true);
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = true;
@@ -84,6 +89,6 @@ export function useSpeechRecognition() {
     startListening,
     stopListening,
     error,
-    hasSupport: typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition)
+    hasSupport,
   };
 }

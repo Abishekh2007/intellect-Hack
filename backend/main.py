@@ -15,6 +15,7 @@ from config import get_settings
 from db.seed import ensure_seeded
 from routes import (
     chat_router,
+    connections_router,
     dashboard_router,
     database_router,
     health_router,
@@ -43,6 +44,7 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(chat_router)
+app.include_router(connections_router)
 app.include_router(sessions_router)
 app.include_router(database_router)
 app.include_router(dashboard_router)

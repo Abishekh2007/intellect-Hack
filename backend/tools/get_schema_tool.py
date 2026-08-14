@@ -6,8 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from db.engine import create_readonly_connection
-from db.schema_discovery import discover_schema
+from db.connections import demo_connection
+from db.schema_discovery import discover_schema_for
 from tools.registry import ToolDefinition
 
 
@@ -19,12 +19,8 @@ class GetSchemaInput(BaseModel):
 
 
 def _get_schema_handler(args: GetSchemaInput, context: dict[str, Any]) -> dict[str, Any]:
-    settings = context.get("settings")
-    conn = create_readonly_connection(settings.db_path)
-    try:
-        schema = discover_schema(conn)
-    finally:
-        conn.close()
+    connection = context.get("connection") or demo_connection()
+    schema = discover_schema_for(connection)
 
     tables = schema["tables"]
     if args.scope and args.scope != "full":

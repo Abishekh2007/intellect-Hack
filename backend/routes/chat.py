@@ -37,7 +37,10 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 async def _event_stream(req: ChatRequest):
     agent = get_agent()
     session_id = req.session_id or session_store.create_session()
-    settings = get_settings()
+
+    # Persist the question before answering it, so a reloaded thread reads in
+    # the order it happened.
+    session_store.add_message(session_id, "user", req.message, {})
 
     events = []
     try:
@@ -50,6 +53,7 @@ async def _event_stream(req: ChatRequest):
                     event.get("answer", ""),
                     {
                         "sql": event.get("sql"),
+                        "table": event.get("table"),
                         "chart": event.get("chart"),
                         "diagram": event.get("diagram"),
                         "mode": event.get("mode"),
@@ -59,8 +63,6 @@ async def _event_stream(req: ChatRequest):
     except Exception as exc:  # noqa: BLE001
         yield _sse("error", {"message": f"Unexpected error: {exc}"})
 
-    # Persist user message after successful turn.
-    session_store.add_message(session_id, "user", req.message, {})
     if not events:
         yield _sse("error", {"message": "No events produced."})
 

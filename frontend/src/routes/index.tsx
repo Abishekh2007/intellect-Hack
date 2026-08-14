@@ -31,15 +31,16 @@ export const Route = createFileRoute("/")({
 
 function Index() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(true);
 
   return (
     <ThemeProvider>
       <AppProvider>
-        <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <div className="relative flex h-screen flex-col overflow-hidden">
           <TopBar
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
             onTogglePanel={() => setPanelOpen((v) => !v)}
+            panelOpen={panelOpen}
           />
           <div className="flex min-h-0 flex-1">
             <div className="hidden lg:flex">
@@ -50,10 +51,10 @@ function Index() {
               <div className="fixed inset-0 z-40 lg:hidden">
                 <button
                   aria-label="Close menu"
-                  className="absolute inset-0 bg-background/70 backdrop-blur-sm"
+                  className="absolute inset-0 bg-background/80"
                   onClick={() => setSidebarOpen(false)}
                 />
-                <div className="absolute inset-y-0 left-0 z-50 bg-background">
+                <div className="absolute inset-y-0 left-0 z-50 shadow-2xl">
                   <Sidebar onNavigate={() => setSidebarOpen(false)} />
                 </div>
               </div>
@@ -73,7 +74,7 @@ function Index() {
             )}
           </div>
         </div>
-        <Toaster position="bottom-right" />
+        <Toaster position="bottom-right" richColors closeButton />
       </AppProvider>
     </ThemeProvider>
   );

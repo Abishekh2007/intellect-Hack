@@ -15,8 +15,9 @@ import {
   Download,
 } from "lucide-react";
 import { api, type ChartSpec, type DiagramSpec, type QueryResult } from "@/lib/api";
+import { useApp } from "@/lib/app-state";
 import { chartPalette, useTheme } from "@/lib/theme";
-import { exportCsv, exportImage, exportPdf } from "@/lib/export-utils";
+import { exportCsv, kpiDataUrl, savePdf, savePng, svgToPng } from "@/lib/export-utils";
 
 function CardShell({
   icon,
@@ -30,10 +31,10 @@ function CardShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="panel overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-border bg-surface/60 px-3 py-2">
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="text-muted-foreground">{icon}</span>
-        <span className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {title}
         </span>
         <div className="ml-auto flex items-center gap-1">{actions}</div>
@@ -81,6 +82,8 @@ export function SqlCard({ sql }: { sql: string }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Re-run against the same database the chat is using, not the default one.
+  const { activeSessionId } = useApp();
 
   const copy = async () => {
     try {
@@ -96,7 +99,7 @@ export function SqlCard({ sql }: { sql: string }) {
     setRunning(true);
     setError(null);
     try {
-      setResult(await api.query(sql));
+      setResult(await api.query(sql, activeSessionId));
     } catch (e) {
       setResult(null);
       setError((e as Error).message);
@@ -222,7 +225,6 @@ export function TableCard({ result, embedded }: { result: QueryResult; embedded?
 function buildOption(spec: ChartSpec, theme: "dark" | "light") {
   const p = chartPalette(theme);
   const c0 = p.series[0] ?? "#6366f1";
-  const c1 = p.series[1] ?? "#8b5cf6";
   const cols = spec.columns ?? [];
   const xi = Math.max(0, cols.indexOf(spec.x_key));
   const yi = cols.indexOf(spec.y_key) === -1 ? Math.min(1, cols.length - 1) : cols.indexOf(spec.y_key);
@@ -253,12 +255,6 @@ function buildOption(spec: ChartSpec, theme: "dark" | "light") {
     axisLabel: { color: p.text, fontSize: 11 },
     splitLine: { lineStyle: { color: p.split } },
   };
-
-  const gradient = (from: string, to: string, opacityTo = 0) =>
-    new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-      { offset: 0, color: from },
-      { offset: 1, color: opacityTo ? to : to },
-    ]);
 
   if (spec.type === "pie") {
     return {
@@ -306,12 +302,9 @@ function buildOption(spec: ChartSpec, theme: "dark" | "light") {
           smooth: true,
           data: vals,
           symbolSize: 6,
-          lineStyle: { width: 2.5, color: c0 },
+          lineStyle: { width: 2, color: c0 },
           itemStyle: { color: c0 },
-          areaStyle: {
-            opacity: strong ? 0.35 : 0.18,
-            color: gradient(c0, "rgba(99,102,241,0)"),
-          },
+          areaStyle: { opacity: strong ? 0.16 : 0.08, color: c0 },
         },
       ],
     };
@@ -325,21 +318,27 @@ function buildOption(spec: ChartSpec, theme: "dark" | "light") {
       {
         type: "bar",
         data: vals,
-        barMaxWidth: 44,
+        barMaxWidth: 40,
         label:
           vals.length <= 8
             ? { show: true, position: "top", color: p.text, fontSize: 11 }
             : { show: false },
-        itemStyle: {
-          borderRadius: [6, 6, 0, 0],
-          color: gradient(c0, c1),
-        },
+        itemStyle: { borderRadius: [2, 2, 0, 0], color: c0 },
       },
     ],
   };
 }
 
-export function ChartView({ spec, height = 320 }: { spec: ChartSpec; height?: number }) {
+export function ChartView({
+  spec,
+  height = 320,
+  onChartReady,
+}: {
+  spec: ChartSpec;
+  height?: number;
+  /** Hands the live ECharts instance up so the card can export a PNG from it. */
+  onChartReady?: (chart: echarts.ECharts | null) => void;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
   const { theme } = useTheme();
   const rows = spec?.rows ?? [];
@@ -348,12 +347,16 @@ export function ChartView({ spec, height = 320 }: { spec: ChartSpec; height?: nu
     if (spec?.type === "kpi" || rows.length === 0 || !ref.current) return;
     const chart = echarts.init(ref.current);
     chart.setOption(buildOption(spec, theme) as echarts.EChartsCoreOption);
+    onChartReady?.(chart);
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(ref.current);
     return () => {
       ro.disconnect();
+      onChartReady?.(null);
       chart.dispose();
     };
+    // onChartReady is a stable callback from the parent's ref setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec, theme, rows.length]);
 
   if (!spec || rows.length === 0) {
@@ -366,7 +369,7 @@ export function ChartView({ spec, height = 320 }: { spec: ChartSpec; height?: nu
     return (
       <div className="flex flex-col items-center justify-center gap-1 px-4 py-10">
         <div className="text-xs uppercase tracking-widest text-muted-foreground">{label}</div>
-        <div className="brand-gradient bg-clip-text text-5xl font-bold tabular-nums text-transparent">
+        <div className="text-5xl font-semibold tabular-nums text-foreground">
           {typeof value === "number" ? value.toLocaleString() : String(value ?? "—")}
         </div>
         {spec.title && <div className="text-xs text-muted-foreground">{spec.title}</div>}
@@ -386,32 +389,69 @@ export function ChartCard({
   onPin?: () => void;
   height?: number;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const { theme } = useTheme();
+
+  const slug = (spec.title || "chart").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+  /** PNG straight from the chart's own canvas — no DOM rasterisation. */
+  const toDataUrl = (): string => {
+    const palette = chartPalette(theme);
+    if (chartRef.current) {
+      return chartRef.current.getDataURL({
+        type: "png",
+        pixelRatio: 2,
+        backgroundColor: palette.exportBg,
+      });
+    }
+    if (spec.type === "kpi") {
+      const value = spec.rows?.[0]?.[(spec.rows[0]?.length ?? 1) - 1];
+      return kpiDataUrl(
+        spec.y_key || spec.x_key || "Value",
+        typeof value === "number" ? value.toLocaleString() : String(value ?? "—"),
+        { background: palette.exportBg, text: palette.text, muted: palette.axis },
+      );
+    }
+    return "";
+  };
+
+  const png = () => {
+    const url = toDataUrl();
+    if (url) savePng(url, `${slug}.png`);
+  };
+  const pdf = () => {
+    const url = toDataUrl();
+    if (url) savePdf(url, `${slug}.pdf`);
+  };
 
   return (
-    <div ref={containerRef}>
-      <CardShell
-        icon={<BarChart3 size={14} />}
-        title="Chart"
-        actions={
-          <>
-            <IconButton onClick={() => exportImage(containerRef.current!, "chart.png")} title="Export PNG">
-              <Download size={12} /> PNG
+    <CardShell
+      icon={<BarChart3 size={14} />}
+      title="Chart"
+      actions={
+        <>
+          <IconButton onClick={png} title="Download as PNG">
+            <Download size={12} /> PNG
+          </IconButton>
+          <IconButton onClick={pdf} title="Download as PDF">
+            <Download size={12} /> PDF
+          </IconButton>
+          {onPin && (
+            <IconButton onClick={onPin} title="Pin to dashboard">
+              <Pin size={12} /> Pin
             </IconButton>
-            <IconButton onClick={() => exportPdf(containerRef.current!, "chart.pdf")} title="Export PDF">
-              <Download size={12} /> PDF
-            </IconButton>
-            {onPin && (
-              <IconButton onClick={onPin} title="Pin to dashboard">
-                <Pin size={12} /> Pin
-              </IconButton>
-            )}
-          </>
-        }
-      >
-        <ChartView spec={spec} {...(height ? { height } : {})} />
-      </CardShell>
-    </div>
+          )}
+        </>
+      }
+    >
+      <ChartView
+        spec={spec}
+        {...(height ? { height } : {})}
+        onChartReady={(chart) => {
+          chartRef.current = chart;
+        }}
+      />
+    </CardShell>
   );
 }
 
@@ -476,19 +516,47 @@ export function DiagramView({ code }: { code: string }) {
 }
 
 export function DiagramCard({ diagram, onPin }: { diagram: DiagramSpec; onPin?: () => void }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { theme } = useTheme();
+
+  const rasterise = async (): Promise<string> => {
+    const svg = bodyRef.current?.querySelector("svg");
+    if (!svg) return "";
+    return svgToPng(svg as SVGElement, chartPalette(theme).exportBg);
+  };
+
+  const png = async () => {
+    const url = await rasterise().catch(() => "");
+    if (url) savePng(url, "diagram.png");
+  };
+  const pdf = async () => {
+    const url = await rasterise().catch(() => "");
+    if (url) savePdf(url, "diagram.pdf");
+  };
+
   return (
     <CardShell
       icon={<Workflow size={14} />}
       title="Diagram"
       actions={
-        onPin ? (
-          <IconButton onClick={onPin} title="Pin to dashboard">
-            <Pin size={12} /> Pin
+        <>
+          <IconButton onClick={png} title="Download as PNG">
+            <Download size={12} /> PNG
           </IconButton>
-        ) : null
+          <IconButton onClick={pdf} title="Download as PDF">
+            <Download size={12} /> PDF
+          </IconButton>
+          {onPin && (
+            <IconButton onClick={onPin} title="Pin to dashboard">
+              <Pin size={12} /> Pin
+            </IconButton>
+          )}
+        </>
       }
     >
-      <DiagramView code={diagram.mermaid} />
+      <div ref={bodyRef}>
+        <DiagramView code={diagram.mermaid} />
+      </div>
     </CardShell>
   );
 }

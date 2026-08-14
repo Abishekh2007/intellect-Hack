@@ -105,10 +105,10 @@ def _statement_type(root: exp.Expression) -> str:
     return "other"
 
 
-def _contains_write(sql: str) -> bool:
+def _contains_write(sql: str, dialect: str = "sqlite") -> bool:
     """Recursively inspect AST for any non-read-only expression."""
     try:
-        tree = sqlglot.parse_one(sql, read="sqlite")
+        tree = sqlglot.parse_one(sql, read=dialect)
     except Exception:
         return True  # fail closed: unparseable == unsafe
     for node in tree.walk():
@@ -124,6 +124,7 @@ def validate_sql(
     *,
     enforce_limit: bool = True,
     max_rows: int = 500,
+    dialect: str = "sqlite",
 ) -> ValidationResult:
     """Validate arbitrary SQL for read-only execution.
 
@@ -131,6 +132,9 @@ def validate_sql(
         sql: the raw SQL string (may contain leading/trailing whitespace).
         enforce_limit: if True, rewrite the AST to force a row LIMIT.
         max_rows: the hard row ceiling to enforce.
+        dialect: sqlglot dialect of the target engine. Parsing and re-emitting
+            in the wrong dialect would either reject valid SQL or emit SQL the
+            server cannot run, so this must match the connection.
 
     Returns:
         A ValidationResult; if valid, ``sql`` holds the (possibly rewritten)
@@ -151,11 +155,11 @@ def validate_sql(
 
     # --- Parser / AST checks (fail closed on any parse error) ---
     try:
-        tree = sqlglot.parse_one(candidate, read="sqlite")
+        tree = sqlglot.parse_one(candidate, read=dialect)
     except Exception as exc:
         return ValidationResult.fail("parse_error", f"Could not parse the SQL query: {exc}")
 
-    if _contains_write(candidate):
+    if _contains_write(candidate, dialect):
         return ValidationResult.fail(
             "unsafe_statement",
             "Only read-only queries (SELECT) are allowed. Write operations are blocked.",
@@ -193,7 +197,7 @@ def validate_sql(
             # Inject `LIMIT max_rows` on the outermost SELECT.
             try:
                 rebuilt = _rewrite_with_limit(tree, max_rows)
-                final_sql = rebuilt.sql(dialect="sqlite", pretty=False)
+                final_sql = rebuilt.sql(dialect=dialect, pretty=False)
                 limit_value = max_rows
             except Exception:
                 return ValidationResult.fail("rewrite_error", "Could not enforce a safe row limit on the query.")

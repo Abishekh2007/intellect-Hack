@@ -20,6 +20,70 @@ from llm.providers import messages_to_openai
 from .base import ProviderError
 
 
+_GEMINI_SCHEMA_KEYS = {
+    "type",
+    "format",
+    "description",
+    "nullable",
+    "enum",
+    "properties",
+    "required",
+    "items",
+}
+
+
+def gemini_schema(schema: Any) -> Any:
+    """Reduce a Pydantic JSON Schema to the subset Gemini accepts.
+
+    Pydantic emits ``title``, ``default`` and — for any ``X | None`` field —
+    an ``anyOf`` union with a null branch. Gemini's function declarations
+    reject all of those, so an optional field is enough to break the whole
+    tool call. Unions are collapsed to their non-null branch and marked
+    nullable instead.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    union = schema.get("anyOf") or schema.get("oneOf")
+    if union:
+        non_null = [s for s in union if s.get("type") != "null"]
+        collapsed = gemini_schema(non_null[0]) if non_null else {"type": "string"}
+        if isinstance(collapsed, dict) and len(non_null) < len(union):
+            collapsed["nullable"] = True
+        if isinstance(collapsed, dict) and schema.get("description"):
+            collapsed.setdefault("description", schema["description"])
+        return collapsed
+
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key not in _GEMINI_SCHEMA_KEYS:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {name: gemini_schema(sub) for name, sub in value.items()}
+        elif key == "items":
+            out[key] = gemini_schema(value)
+        else:
+            out[key] = value
+    out.setdefault("type", "object" if "properties" in out else "string")
+    # A required field that no longer exists would be rejected outright.
+    if "required" in out and "properties" in out:
+        out["required"] = [r for r in out["required"] if r in out["properties"]]
+    return out
+
+
+def _as_object(value: Any) -> dict[str, Any]:
+    """Coerce tool arguments to a dict, whichever shape the SDK handed back."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value) if value.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 class OpenAIProvider:
     name = "openai"
 
@@ -36,8 +100,13 @@ class OpenAIProvider:
 
         try:
             client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-            oai_messages = [{"role": "system", "content": system_prompt}]
-            oai_messages.extend(messages_to_openai(messages))
+            # `name` on tool results is carried for Gemini's benefit; strip it
+            # here, since OpenAI-compatible endpoints vary in how they treat
+            # unexpected fields.
+            oai_messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+            oai_messages.extend(
+                {k: v for k, v in m.items() if k != "name"} for m in messages_to_openai(messages)
+            )
 
             def tool_schema(m: dict[str, Any]) -> dict[str, Any]:
                 return {
@@ -126,14 +195,18 @@ class AnthropicProvider:
             anthropic_messages: list[dict[str, Any]] = []
             for m in oai_messages:
                 if m["role"] == "assistant" and m.get("tool_calls"):
-                    blocks: list[dict[str, Any]] = [{"type": "text", "text": m.get("content") or ""}]
+                    blocks: list[dict[str, Any]] = []
+                    if m.get("content"):
+                        blocks.append({"type": "text", "text": m["content"]})
                     for tc in m["tool_calls"]:
                         blocks.append(
                             {
                                 "type": "tool_use",
                                 "id": tc["id"],
                                 "name": tc["function"]["name"],
-                                "input": tc["function"]["arguments"],
+                                # OpenAI shape carries arguments as a JSON
+                                # string; Anthropic wants the object itself.
+                                "input": _as_object(tc["function"]["arguments"]),
                             }
                         )
                     anthropic_messages.append({"role": "assistant", "content": blocks})
@@ -153,16 +226,32 @@ class AnthropicProvider:
                 else:
                     anthropic_messages.append({"role": m["role"], "content": m.get("content", "")})
 
-            with client.messages.stream(
-                model=self.model,
-                max_tokens=4096,
-                system=system_prompt,
-                messages=anthropic_messages,
-                tools=[to_anthropic_tool(t) for t in tools] if tools else None,
-                temperature=0,
-            ) as stream:
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": 4096,
+                "system": system_prompt,
+                "messages": anthropic_messages,
+                "temperature": 0,
+            }
+            if tools:
+                kwargs["tools"] = [to_anthropic_tool(t) for t in tools]
+
+            with client.messages.stream(**kwargs) as stream:
+                # Stream prose as it arrives so the UI stays live.
                 for text in stream.text_stream:
                     yield {"type": "text", "text": text}
+                # tool_use arguments arrive as partial JSON fragments; the
+                # assembled message is the reliable place to read them.
+                final = stream.get_final_message()
+
+            for block in final.content:
+                if getattr(block, "type", None) == "tool_use":
+                    yield {
+                        "type": "tool_call",
+                        "id": block.id,
+                        "name": block.name,
+                        "arguments": _as_object(block.input),
+                    }
             yield {"type": "done"}
         except ProviderError:
             raise
@@ -191,13 +280,33 @@ class GeminiProvider:
                 return {
                     "name": m["name"],
                     "description": m["description"],
-                    "parameters": m.get("schema", {"type": "object", "properties": {}}),
+                    "parameters": gemini_schema(
+                        m.get("schema", {"type": "object", "properties": {}})
+                    ),
                 }
 
             oai_messages = messages_to_openai(messages)
             gemini_contents: list[dict[str, Any]] = []
             for m in oai_messages:
                 role = "model" if m["role"] == "assistant" else "user"
+                if m["role"] == "tool":
+                    # Gemini matches a response to its call by function name,
+                    # so an empty name here silently breaks the tool loop.
+                    gemini_contents.append(
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "functionResponse": {
+                                        "name": m.get("name") or "tool",
+                                        "response": {"result": m["content"]},
+                                    }
+                                }
+                            ],
+                        }
+                    )
+                    continue
+
                 parts: list[dict[str, Any]] = []
                 if m.get("content"):
                     parts.append({"text": m["content"]})
@@ -206,25 +315,18 @@ class GeminiProvider:
                         {
                             "functionCall": {
                                 "name": tc["function"]["name"],
-                                "args": tc["function"]["arguments"],
+                                "args": _as_object(tc["function"]["arguments"]),
                             }
                         }
                     )
-                if m["role"] == "tool":
-                    parts = [
-                        {
-                            "functionResponse": {
-                                "name": "",
-                                "response": {"result": m["content"]},
-                            }
-                        }
-                    ]
+                if not parts:
+                    continue
                 gemini_contents.append({"role": role, "parts": parts})
 
+            # google-genai expects declarations grouped under a Tool, not a
+            # bare list of function declarations.
             tools_config = (
-                [to_gemini_tool(t) for t in tools]
-                if tools
-                else None
+                [{"function_declarations": [to_gemini_tool(t) for t in tools]}] if tools else None
             )
             response = client.models.generate_content_stream(
                 model=self.model,

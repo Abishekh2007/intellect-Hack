@@ -38,13 +38,35 @@ def _init(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
-            payload TEXT, created_at TEXT
+            payload TEXT, created_at TEXT, seq INTEGER DEFAULT 0
         )"""
     )
+    # created_at has one-second resolution, which is too coarse to order a
+    # question and its answer. seq is the real ordering key; migrate old files.
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+    if "seq" not in existing:
+        conn.execute("ALTER TABLE messages ADD COLUMN seq INTEGER DEFAULT 0")
     conn.execute(
         """CREATE TABLE IF NOT EXISTS dashboard_items (
             id TEXT PRIMARY KEY, session_id TEXT, kind TEXT, title TEXT,
             payload TEXT, created_at TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS shares (
+            id TEXT PRIMARY KEY, kind TEXT, title TEXT, payload TEXT, created_at TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS connections (
+            id TEXT PRIMARY KEY, name TEXT, kind TEXT, target TEXT, created_at TEXT
+        )"""
+    )
+    # Which database each session is pointed at. Server-side by design: the
+    # model must not be able to choose the database it queries.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS session_connections (
+            session_id TEXT PRIMARY KEY, connection_id TEXT
         )"""
     )
     conn.commit()
@@ -115,9 +137,14 @@ def add_message(session_id: str, role: str, content: str, payload: dict[str, Any
     with _lock:
         conn = _conn()
         try:
+            next_seq = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM messages WHERE session_id=?",
+                (session_id,),
+            ).fetchone()["n"]
             conn.execute(
-                "INSERT INTO messages (id, session_id, role, content, payload, created_at) VALUES (?,?,?,?,?,datetime('now'))",
-                (msg_id, session_id, role, content, json.dumps(payload or {}, default=str)),
+                "INSERT INTO messages (id, session_id, role, content, payload, created_at, seq)"
+                " VALUES (?,?,?,?,?,datetime('now'),?)",
+                (msg_id, session_id, role, content, json.dumps(payload or {}, default=str), next_seq),
             )
             conn.execute(
                 "UPDATE sessions SET updated_at=datetime('now') WHERE id=?", (session_id,)
@@ -132,7 +159,8 @@ def list_messages(session_id: str) -> list[dict[str, Any]]:
         conn = _conn()
         try:
             rows = conn.execute(
-                "SELECT * FROM messages WHERE session_id=? ORDER BY created_at", (session_id,)
+                "SELECT * FROM messages WHERE session_id=? ORDER BY seq, created_at",
+                (session_id,),
             ).fetchall()
         finally:
             conn.close()
@@ -191,3 +219,113 @@ def delete_dashboard_item(item_id: str) -> None:
             conn.commit()
         finally:
             conn.close()
+
+
+def add_connection(name: str, kind: str, target: str) -> str:
+    connection_id = uuid.uuid4().hex[:12]
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute(
+                "INSERT INTO connections (id, name, kind, target, created_at)"
+                " VALUES (?,?,?,?,datetime('now'))",
+                (connection_id, name, kind, target),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return connection_id
+
+
+def list_connections() -> list[dict[str, Any]]:
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute("SELECT * FROM connections ORDER BY created_at").fetchall()
+        finally:
+            conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_connection(connection_id: str) -> dict[str, Any] | None:
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute("SELECT * FROM connections WHERE id=?", (connection_id,)).fetchone()
+        finally:
+            conn.close()
+    return dict(row) if row else None
+
+
+def delete_connection(connection_id: str) -> None:
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute("DELETE FROM connections WHERE id=?", (connection_id,))
+            # Any session left pointing at it falls back to the demo database.
+            conn.execute(
+                "DELETE FROM session_connections WHERE connection_id=?", (connection_id,)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def set_session_connection(session_id: str, connection_id: str) -> None:
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute(
+                "INSERT INTO session_connections (session_id, connection_id) VALUES (?,?)"
+                " ON CONFLICT(session_id) DO UPDATE SET connection_id=excluded.connection_id",
+                (session_id, connection_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_session_connection(session_id: str) -> str | None:
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute(
+                "SELECT connection_id FROM session_connections WHERE session_id=?", (session_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+    return row["connection_id"] if row else None
+
+
+def create_share(kind: str, title: str, payload: dict[str, Any]) -> str:
+    """Persist a shared view. Links must outlive a server restart."""
+    share_id = uuid.uuid4().hex[:8]
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute(
+                "INSERT INTO shares (id, kind, title, payload, created_at)"
+                " VALUES (?,?,?,?,datetime('now'))",
+                (share_id, kind, title, json.dumps(payload, default=str)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return share_id
+
+
+def get_share(share_id: str) -> dict[str, Any] | None:
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute("SELECT * FROM shares WHERE id=?", (share_id,)).fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
+    except json.JSONDecodeError:
+        d["payload"] = {}
+    return d

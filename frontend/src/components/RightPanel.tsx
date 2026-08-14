@@ -11,6 +11,7 @@ import {
 import { ChartView, DiagramView, IconButton, MarkdownText, TableCard } from "@/components/artifacts";
 import { useApp } from "@/lib/app-state";
 import { QueryHistory } from "./QueryHistory";
+import { motion, AnimatePresence } from "framer-motion";
 
 type Tab = "schema" | "database" | "dashboard" | "history";
 
@@ -18,49 +19,54 @@ export function RightPanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("schema");
   const [schema, setSchema] = useState<Schema | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(false);
-  const { activeSessionId, send } = useApp();
+  const { activeSessionId, send, connectionVersion } = useApp();
 
   const loadSchema = useCallback(async () => {
     setSchemaLoading(true);
     try {
-      setSchema(await api.schema());
+      // Scoped to the session so the panel shows whichever database this
+      // chat is pointed at, not always the demo one.
+      setSchema(await api.schema(activeSessionId));
     } catch {
       setSchema({ tables: [] });
     } finally {
       setSchemaLoading(false);
     }
-  }, []);
+  }, [activeSessionId]);
 
   useEffect(() => {
     loadSchema();
-  }, [loadSchema]);
+  }, [loadSchema, connectionVersion]);
 
   return (
-    <aside className="flex h-full w-full flex-col border-l border-border bg-surface/50 lg:w-[360px] lg:shrink-0">
-      <div className="flex items-center gap-1 border-b border-border px-2 py-2">
+    <aside className="flex h-full w-full flex-col border-l border-border bg-surface lg:w-[380px] lg:shrink-0">
+      <div className="flex items-center gap-0.5 border-b border-border px-1.5 py-2">
         {(
           [
             ["schema", "Schema", <Table2 key="a" size={13} />],
-            ["database", "Database", <Database key="b" size={13} />],
-            ["dashboard", "Dashboard", <LayoutDashboard key="c" size={13} />],
+            ["database", "Data", <Database key="b" size={13} />],
+            // "Pinned" says what the tab holds and fits the panel; "Dashboard"
+            // truncated to "Dashb…" at this width.
+            ["dashboard", "Pinned", <LayoutDashboard key="c" size={13} />],
             ["history", "History", <History key="d" size={13} />],
           ] as [Tab, string, React.ReactNode][]
         ).map(([id, label, icon]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors duration-150 ${
+            title={label}
+            className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-xs font-medium transition-colors duration-150 ${
               tab === id ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-secondary"
             }`}
           >
-            {icon}
-            {label}
+            <span className="shrink-0">{icon}</span>
+            <span className="truncate">{label}</span>
           </button>
         ))}
         <button
           onClick={onClose}
           aria-label="Close panel"
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary"
+          className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-secondary"
         >
           <X size={14} />
         </button>
@@ -73,6 +79,7 @@ export function RightPanel({ onClose }: { onClose: () => void }) {
             loading={schemaLoading}
             onRefresh={loadSchema}
             onEr={() => send("show me the ER diagram")}
+            activeSessionId={activeSessionId}
           />
         )}
         {tab === "database" && <DatabaseTab onSchemaChanged={loadSchema} />}
@@ -88,11 +95,13 @@ function SchemaTab({
   loading,
   onRefresh,
   onEr,
+  activeSessionId,
 }: {
   schema: Schema | null;
   loading: boolean;
   onRefresh: () => void;
   onEr: () => void;
+  activeSessionId: string | null;
 }) {
   if (loading)
     return (
@@ -104,6 +113,22 @@ function SchemaTab({
     );
 
   const tables = schema?.tables ?? [];
+  const [previewTable, setPreviewTable] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<QueryResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  const handlePreview = async (tableName: string) => {
+    setPreviewTable(tableName);
+    setPreviewLoading(true);
+    try {
+      setPreviewData(await api.tablePreview(tableName, activeSessionId));
+    } catch {
+      toast.error("Couldn't preview table");
+      setPreviewTable(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -121,8 +146,16 @@ function SchemaTab({
         </p>
       ) : (
         tables.map((t) => (
-          <div key={t.name} className="panel p-3">
-            <div className="font-mono text-[13px] font-bold">{t.name}</div>
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            key={t.name} 
+            className="panel p-3"
+          >
+            <div className="flex justify-between items-center">
+              <div className="font-mono text-[13px] font-bold">{t.name}</div>
+              <IconButton onClick={() => handlePreview(t.name)}>Preview</IconButton>
+            </div>
             <div className="mt-2 space-y-1">
               {t.columns.map((c) => (
                 <div key={c.name} className="flex items-center gap-2 text-[12px]">
@@ -145,14 +178,47 @@ function SchemaTab({
                 ))}
               </div>
             )}
-          </div>
+          </motion.div>
         ))
       )}
+      
+      <AnimatePresence>
+        {previewTable && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.95 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.95 }}
+              className="bg-surface border border-border rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col"
+            >
+              <div className="flex items-center justify-between p-3 border-b border-border">
+                <h3 className="font-mono font-bold text-sm">Preview: {previewTable}</h3>
+                <IconButton onClick={() => { setPreviewTable(null); setPreviewData(null); }}>
+                  <X size={14} />
+                </IconButton>
+              </div>
+              <div className="flex-1 overflow-auto p-4 scroll-thin">
+                {previewLoading ? (
+                  <div className="flex justify-center p-8"><Loader2 className="animate-spin text-muted-foreground" /></div>
+                ) : previewData ? (
+                  <TableCard result={previewData} />
+                ) : null}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 function DatabaseTab({ onSchemaChanged }: { onSchemaChanged: () => void }) {
+  const { activeSessionId, onConnectionChange } = useApp();
   const dbRef = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [dbNote, setDbNote] = useState<{ ok: boolean; text: string } | null>(null);
@@ -166,8 +232,12 @@ function DatabaseTab({ onSchemaChanged }: { onSchemaChanged: () => void }) {
     const f = dbRef.current?.files?.[0];
     if (!f) return;
     try {
-      const r = await api.uploadDatabase(f);
-      setDbNote({ ok: true, text: `Database active — ${r.tables?.length ?? 0} tables` });
+      const r = await api.uploadDatabase(f, activeSessionId);
+      setDbNote({
+        ok: true,
+        text: `${r.connection?.name ?? "Database"} connected — ${r.tables?.length ?? 0} tables`,
+      });
+      onConnectionChange();
       onSchemaChanged();
     } catch (e) {
       setDbNote({ ok: false, text: (e as Error).message });

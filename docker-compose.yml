@@ -1,0 +1,50 @@
+# Full stack: API + web app.
+#
+#   docker compose up --build      then open http://localhost:8080
+#
+# API keys are optional. Without one the app falls back to its offline
+# engine and still answers real questions against the demo database.
+
+services:
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DB_PATH: /app/data/ecommerce.db
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Let the browser talk to the API through the web container.
+      CORS_ORIGINS: '["http://localhost:8080","http://127.0.0.1:8080"]'
+    volumes:
+      # Chat history and the seeded demo database survive a rebuild.
+      - datapilot-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+    ports:
+      - "8080:8080"
+    environment:
+      # vite.config.ts reads this to point its /api and /health proxy at the
+      # API container. The browser only ever talks to port 8080.
+      DATAPILOT_API: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  datapilot-data:

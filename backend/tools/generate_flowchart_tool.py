@@ -6,8 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from db.engine import create_readonly_connection
-from db.schema_discovery import discover_schema
+from db.connections import demo_connection
+from db.schema_discovery import discover_schema_for
 from tools.registry import ToolDefinition
 from viz.mermaid_builder import build_decision_tree, build_er_diagram, build_flowchart
 
@@ -31,13 +31,8 @@ def _generate_flowchart_handler(args: GenerateFlowchartInput, context: dict[str,
     diagram_type = (args.diagram_type or "er").lower()
 
     if diagram_type == "er":
-        settings = context.get("settings")
-        conn = create_readonly_connection(settings.db_path)
-        try:
-            schema = discover_schema(conn)
-        finally:
-            conn.close()
-        mermaid = build_er_diagram(schema)
+        connection = context.get("connection") or demo_connection()
+        mermaid = build_er_diagram(discover_schema_for(connection))
         return {"diagram_type": "er", "mermaid": mermaid}
 
     if diagram_type == "process":

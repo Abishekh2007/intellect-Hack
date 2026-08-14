@@ -10,9 +10,15 @@ from pydantic import BaseModel
 
 from config import get_settings
 from db.access_layer import execute_read_only
+from db.connections import (
+    SQLITE_KIND,
+    get_session_connection,
+    register_connection,
+    set_session_connection,
+)
 from db.engine import create_readonly_connection
 from db.file_ingest import ALLOWED_EXTENSIONS, ingest_upload
-from db.schema_discovery import discover_schema
+from db.schema_discovery import discover_schema, discover_schema_for
 
 router = APIRouter(prefix="/api", tags=["database"])
 
@@ -22,28 +28,50 @@ class QueryRequest(BaseModel):
 
 
 @router.get("/schema")
-def schema() -> dict:
-    settings = get_settings()
-    conn = create_readonly_connection(settings.db_path)
-    try:
-        return discover_schema(conn)
-    finally:
-        conn.close()
+def schema(session_id: str | None = None) -> dict:
+    return discover_schema_for(get_session_connection(session_id or ""))
 
 
 @router.post("/query")
-def run_query(body: QueryRequest) -> dict:
+def run_query(body: QueryRequest, session_id: str | None = None) -> dict:
     try:
-        return execute_read_only(body.sql)
+        return execute_read_only(body.sql, connection=get_session_connection(session_id or ""))
     except Exception as exc:  # noqa: BLE001
         error_type = getattr(exc, "error_type", "sql_error")
         message = getattr(exc, "message", str(exc))
         raise HTTPException(status_code=400, detail={"type": error_type, "message": message}) from exc
 
 
+@router.get("/table-preview/{table_name}")
+def table_preview(table_name: str, session_id: str | None = None) -> dict:
+    """Preview a table on whichever database the session is using.
+
+    The table name is checked against the live schema rather than
+    interpolated blind, so it cannot be used to smuggle SQL.
+    """
+    connection = get_session_connection(session_id or "")
+    schema_info = discover_schema_for(connection)
+    known = {t["name"] for t in schema_info["tables"]}
+    if table_name not in known:
+        raise HTTPException(status_code=404, detail="Table not found")
+
+    quoted = table_name.replace('"', '""')
+    try:
+        return execute_read_only(
+            f'SELECT * FROM "{quoted}" LIMIT 50', connection=connection, max_rows=50
+        )
+    except Exception as exc:  # noqa: BLE001
+        message = getattr(exc, "message", str(exc))
+        raise HTTPException(status_code=400, detail={"message": message}) from exc
+
 @router.post("/upload")
-async def upload_database(file: UploadFile = File(...)) -> dict:
-    """Replace the active demo database with an uploaded SQLite file."""
+async def upload_database(file: UploadFile = File(...), session_id: str | None = None) -> dict:
+    """Register an uploaded SQLite file as a new connection.
+
+    It is added alongside the demo database rather than replacing it, so the
+    demo data is always one click away and one user's upload cannot redirect
+    everyone else's queries.
+    """
     settings = get_settings()
     content = await file.read()
     ext = Path(file.filename or "").suffix.lower()
@@ -71,9 +99,15 @@ async def upload_database(file: UploadFile = File(...)) -> dict:
     except sqlite3.Error as exc:
         raise HTTPException(status_code=400, detail=f"Not a valid SQLite database: {exc}") from exc
 
-    # Point the app at the uploaded DB for future queries.
-    settings.db_path = dest
-    return {"ok": True, "database": str(dest), "tables": [t[0] for t in tables]}
+    connection = register_connection(Path(file.filename).stem, SQLITE_KIND, str(dest))
+    # Switch only the uploading session over to it.
+    if session_id:
+        set_session_connection(session_id, connection.id)
+    return {
+        "ok": True,
+        "connection": connection.public(),
+        "tables": [t[0] for t in tables],
+    }
 
 
 @router.post("/upload-file")

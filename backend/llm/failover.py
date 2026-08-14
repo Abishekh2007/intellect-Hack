@@ -9,6 +9,7 @@ offline engine.
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from config import get_settings
 from llm.base import AllProvidersFailed, ProviderError
@@ -28,7 +29,7 @@ def build_providers(settings=None) -> list[Any]:
     if _is_real(settings.gemini_api_key):
         built["gemini"] = GeminiProvider(settings.gemini_api_key, settings.gemini_model)
     if _is_real(settings.openai_api_key):
-        built["openai"] = OpenAIProvider(settings.openai_api_key, settings.openai_model)
+        built["openai"] = OpenAIProvider(settings.openai_api_key, settings.openai_model, settings.openai_base_url)
     if _is_real(settings.anthropic_api_key):
         built["anthropic"] = AnthropicProvider(settings.anthropic_api_key, settings.anthropic_model)
 
@@ -65,6 +66,7 @@ class FailoverProvider:
                 yield from provider.stream_tool_calls(messages, tools, system_prompt)
                 return
             except ProviderError as exc:
+                logging.error(f"Provider {provider.name} failed: {exc.message}", exc_info=True)
                 errors.append(f"{provider.name}: {exc.message}")
                 continue
         raise AllProvidersFailed("; ".join(errors))

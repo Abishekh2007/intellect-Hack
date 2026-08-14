@@ -151,7 +151,9 @@ def answer_offline(prompt: str, settings) -> dict[str, Any]:
     elif _REVENUE_RE.search(p) and _CATEGORY_RE.search(p):
         sql = f"SELECT p.category, SUM(oi.quantity*oi.unit_price) AS revenue FROM order_items oi JOIN products p ON oi.product_id=p.product_id JOIN orders o ON oi.order_id=o.order_id WHERE o.status='completed' GROUP BY p.category ORDER BY revenue DESC"
         answer = "Revenue by product category."
-        chart = chart_hint or "bar"
+        # Leave the type open: a "breakdown"/"share" question earns a pie here,
+        # a plain "by category" comparison stays a bar.
+        chart = chart_hint
     elif _REVENUE_RE.search(p) and _CUSTOMER_RE.search(p) and _TOP_RE.search(p):
         n = _TOP_RE.search(p).group(1)
         sql = f"SELECT c.name AS customer, SUM(oi.quantity*oi.unit_price) AS spent FROM orders o JOIN order_items oi ON o.order_id=oi.order_id JOIN customers c ON o.customer_id=c.customer_id WHERE o.status='completed' GROUP BY c.name ORDER BY spent DESC LIMIT {n}"
@@ -160,7 +162,7 @@ def answer_offline(prompt: str, settings) -> dict[str, Any]:
     elif _CITY_RE.search(p) and _REVENUE_RE.search(p):
         sql = f"SELECT c.city, SUM(oi.quantity*oi.unit_price) AS revenue FROM orders o JOIN order_items oi ON o.order_id=oi.order_id JOIN customers c ON o.customer_id=c.customer_id WHERE o.status='completed' GROUP BY c.city ORDER BY revenue DESC"
         answer = "Revenue by customer city."
-        chart = chart_hint or "pie"
+        chart = chart_hint
     elif _STOCK_RE.search(p):
         sql = "SELECT p.name AS product, p.stock AS stock_level FROM products p ORDER BY p.stock ASC LIMIT 10"
         answer = "Products with lowest stock."
@@ -197,8 +199,8 @@ def answer_offline(prompt: str, settings) -> dict[str, Any]:
 
     columns, rows = result["columns"], result["rows"]
     chart_spec = None
-    if chart and rows:
-        chart_spec = build_chart_spec(columns, rows, chart_type=chart)
+    if rows:
+        chart_spec = build_chart_spec(columns, rows, chart_type=chart, intent=prompt)
         chart_spec["title"] = answer
     summary = _summarize_result(result)
     return {
