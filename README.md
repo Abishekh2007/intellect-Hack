@@ -3,12 +3,15 @@
 **Ask your database anything in plain English. Get SQL, tables, charts, diagrams and an explanation.**
 
 DataPilot is a conversational AI agent for database interaction and visualization,
-built for the iTech AI Innovation Hackathon 2026 challenge *"Building Intelligent
-LLM Agents for Database Interaction & Visualization"*.
+built for **Intellect Hack 2026** — Track 5: Open Innovation, addressing the
+challenge *"Building Intelligent LLM Agents for Database Interaction &
+Visualization"*.
 
 Type a question. The agent inspects the live schema, writes a **read-only** SQL query,
 runs it behind five layers of safety checks, picks a chart type that suits the data,
 and explains what the numbers mean — streaming every step to the browser as it happens.
+
+**Live demo:** <https://intellect-hack-2026.vercel.app/>
 
 ---
 
