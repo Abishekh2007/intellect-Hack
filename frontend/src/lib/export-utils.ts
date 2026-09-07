@@ -12,8 +12,15 @@ import jsPDF from "jspdf";
  * the surrounding DOM.
  */
 
-export function exportCsv(columns: string[], rows: any[][], filename: string = "export.csv") {
-  const escapeCell = (cell: any) => {
+/** A cell as it arrives from the query API. */
+type Cell = string | number | boolean | null | undefined;
+
+export function exportCsv(
+  columns: string[],
+  rows: readonly Cell[][],
+  filename: string = "export.csv",
+) {
+  const escapeCell = (cell: Cell) => {
     if (cell === null || cell === undefined) return "";
     const str = String(cell);
     if (str.includes(",") || str.includes('"') || str.includes("\n")) {
@@ -25,10 +32,12 @@ export function exportCsv(columns: string[], rows: any[][], filename: string = "
   const csvContent = [
     columns.map(escapeCell).join(","),
     ...rows.map((row) => row.map(escapeCell).join(",")),
-  ].join("\n");
+  ].join("\r\n");
 
+  // A UTF-8 BOM, and CRLF line endings above. Without them Excel opens the
+  // file in the local ANSI codepage and mangles every non-ASCII character.
   download(
-    URL.createObjectURL(new Blob([csvContent], { type: "text/csv;charset=utf-8;" })),
+    URL.createObjectURL(new Blob(["﻿", csvContent], { type: "text/csv;charset=utf-8;" })),
     filename,
     true,
   );
@@ -41,7 +50,12 @@ function download(href: string, filename: string, revoke = false) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  if (revoke) URL.revokeObjectURL(href);
+  if (revoke) {
+    // Revoking in the same tick can invalidate the URL before the browser has
+    // started reading it, which produced a silently empty or failed CSV
+    // download. One frame plus a beat is enough for every engine.
+    setTimeout(() => URL.revokeObjectURL(href), 10_000);
+  }
 }
 
 export function savePng(dataUrl: string, filename = "chart.png") {
@@ -49,25 +63,35 @@ export function savePng(dataUrl: string, filename = "chart.png") {
 }
 
 /** Fit a PNG onto a single PDF page at its own aspect ratio. */
-export function savePdf(dataUrl: string, filename = "chart.pdf") {
-  const image = new Image();
-  image.onload = () => {
-    const landscape = image.width >= image.height;
-    const pdf = new jsPDF({
-      orientation: landscape ? "landscape" : "portrait",
-      unit: "pt",
-      format: "a4",
-    });
-    const margin = 32;
-    const pageW = pdf.internal.pageSize.getWidth() - margin * 2;
-    const pageH = pdf.internal.pageSize.getHeight() - margin * 2;
-    const scale = Math.min(pageW / image.width, pageH / image.height);
-    const w = image.width * scale;
-    const h = image.height * scale;
-    pdf.addImage(dataUrl, "PNG", (pageW - w) / 2 + margin, (pageH - h) / 2 + margin, w, h);
-    pdf.save(filename);
-  };
-  image.src = dataUrl;
+export function savePdf(dataUrl: string, filename = "chart.pdf"): Promise<void> {
+  // Returns a promise so a failure is reportable. The bare `image.onload`
+  // callback had no `onerror`, so a bad data URL simply did nothing at all.
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const landscape = image.width >= image.height;
+        const pdf = new jsPDF({
+          orientation: landscape ? "landscape" : "portrait",
+          unit: "pt",
+          format: "a4",
+        });
+        const margin = 32;
+        const pageW = pdf.internal.pageSize.getWidth() - margin * 2;
+        const pageH = pdf.internal.pageSize.getHeight() - margin * 2;
+        const scale = Math.min(pageW / image.width, pageH / image.height);
+        const w = image.width * scale;
+        const h = image.height * scale;
+        pdf.addImage(dataUrl, "PNG", (pageW - w) / 2 + margin, (pageH - h) / 2 + margin, w, h);
+        pdf.save(filename);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    };
+    image.onerror = () => reject(new Error("Could not read the exported image."));
+    image.src = dataUrl;
+  });
 }
 
 /** Render a KPI card to a PNG, since it has no ECharts canvas behind it. */
@@ -119,21 +143,30 @@ export function svgToPng(svg: SVGElement, background: string): Promise<string> {
     const url = URL.createObjectURL(blob);
     const image = new Image();
     image.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = width * 2;
-      canvas.height = height * 2;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
+      // The whole body is guarded. `toDataURL` throws SecurityError on a
+      // tainted canvas, and a throw inside an onload handler does not reject
+      // the surrounding promise — it escapes as an uncaught error and leaves
+      // the promise pending forever. That is exactly how diagram export came
+      // to hang with no download and no error message.
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = width * 2;
+        canvas.height = height * 2;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas is unavailable"));
+          return;
+        }
+        ctx.scale(2, 2);
+        ctx.fillStyle = background;
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/png"));
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error("Could not rasterise the diagram"));
+      } finally {
         URL.revokeObjectURL(url);
-        reject(new Error("Canvas is unavailable"));
-        return;
       }
-      ctx.scale(2, 2);
-      ctx.fillStyle = background;
-      ctx.fillRect(0, 0, width, height);
-      ctx.drawImage(image, 0, 0, width, height);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/png"));
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);

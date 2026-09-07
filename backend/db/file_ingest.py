@@ -131,11 +131,10 @@ def extract_rows(filename: str, content: bytes) -> tuple[list[str], list[list[st
         columns = rows[0]
         data = rows[1:]
     elif ext == ".json":
-        rows = _json_rows(content)
-        if not rows:
-            return [], []
-        columns = [f"col{i}" for i in range(len(rows[0]))] if not rows[0] else rows[0][:1]
-        # _json_rows already returns rows; but we need columns. Rebuild:
+        # Straight to the columns-aware reader. The previous version called
+        # _json_rows, computed a `columns` value, discarded both, and returned
+        # _json_rows_with_columns anyway — parsing the same payload three
+        # times to reach the answer the third call already had.
         return _json_rows_with_columns(content)
     elif ext in (".xlsx", ".xls"):
         rows = _excel_rows(content)
@@ -177,21 +176,34 @@ def _json_rows_with_columns(content: bytes) -> tuple[list[str], list[list[str]]]
 
 
 def _infer_types(columns: list[str], data: list[list[str]]) -> list[str]:
-    types = ["TEXT"] * len(columns)
+    """Infer a SQLite column type per column from the sampled values.
+
+    Every column used to come back TEXT: the accumulator started at "TEXT",
+    and the first branch that saw a number hit ``if types[i] == "TEXT":
+    continue`` and left it there forever. Numeric uploads therefore sorted and
+    summed as strings — "9" ranked above "100" in every ORDER BY.
+
+    Blank cells are ignored rather than forcing TEXT, so one empty cell in a
+    numeric column no longer downgrades the whole column.
+    """
+    types: list[str] = []
     for col_idx in range(len(columns)):
+        seen: set[str] = set()
         for row in data:
             if col_idx >= len(row):
                 continue
-            t = _detect_type(row[col_idx])
-            if t == "TEXT":
-                types[col_idx] = "TEXT"
-                break
-            if types[col_idx] == "TEXT":
-                continue
-            if types[col_idx] == "":
-                types[col_idx] = t
-            elif types[col_idx] != t:
-                types[col_idx] = "TEXT"
+            value = row[col_idx]
+            if value is None or not str(value).strip():
+                continue  # blanks are unknown, not text
+            seen.add(_detect_type(str(value)))
+            if "TEXT" in seen:
+                break  # one real string settles it
+        if not seen or "TEXT" in seen:
+            types.append("TEXT")
+        elif seen == {"INTEGER"}:
+            types.append("INTEGER")
+        else:
+            types.append("REAL")  # INTEGER mixed with REAL widens to REAL
     return types
 
 
@@ -217,10 +229,18 @@ def ingest_upload(filename: str, content: bytes, conn: sqlite3.Connection) -> di
         suffix += 1
 
     col_defs = []
-    col_names = []
+    col_names: list[str] = []
     types = _infer_types(columns, data)
     for i, col in enumerate(columns):
         safe_col = sanitize_table_name(col) or f"col{i}"
+        # Sanitising collapses distinct headers onto the same identifier
+        # ("total sales" and "total-sales" both become "total_sales"), and
+        # CREATE TABLE rejects a duplicate column outright. Suffix instead.
+        if safe_col in col_names:
+            n = 2
+            while f"{safe_col}_{n}" in col_names:
+                n += 1
+            safe_col = f"{safe_col}_{n}"
         col_names.append(safe_col)
         col_defs.append(f'"{safe_col}" {types[i]}')
 
@@ -228,9 +248,11 @@ def ingest_upload(filename: str, content: bytes, conn: sqlite3.Connection) -> di
     placeholders = ", ".join("?" for _ in col_names)
     quoted_cols = ", ".join('"%s"' % c for c in col_names)
     insert_sql = f'INSERT INTO "{table_name}" ({quoted_cols}) VALUES ({placeholders})'
-    for row in data:
-        padded = (list(row) + [None] * len(col_names))[: len(col_names)]
-        conn.execute(insert_sql, padded)
+    width = len(col_names)
+    conn.executemany(
+        insert_sql,
+        ((list(row) + [None] * width)[:width] for row in data),
+    )
     conn.commit()
 
     return {

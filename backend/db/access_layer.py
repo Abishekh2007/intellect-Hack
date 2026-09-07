@@ -34,21 +34,28 @@ class QueryExecutionError(Exception):
         self.message = message
 
 
-def _run_with_timeout(db_path: Path, sql: str, timeout_seconds: int = 15) -> list[Any]:
+def _run_with_timeout(
+    db_path: Path, sql: str, timeout_seconds: int = 15
+) -> tuple[list[str], list[Any]]:
     """Run a query on a worker thread; interrupt the connection on timeout.
 
     The SQLite connection is created inside the worker thread (SQLite
     connections are thread-bound); the main thread may call ``interrupt()``
     from outside, which is explicitly allowed and stops a running query.
     """
-    holder: dict[str, Any] = {"rows": None, "error": None, "conn": None}
+    holder: dict[str, Any] = {"rows": None, "columns": [], "error": None, "conn": None}
 
     def worker() -> None:
         conn = None
         try:
             conn = create_readonly_connection(db_path)
             holder["conn"] = conn
-            holder["rows"] = conn.execute(sql).fetchall()
+            cursor = conn.execute(sql)
+            # Read the column names off the cursor, not off the first row: a
+            # query returning zero rows still has columns, and deriving them
+            # from row[0] left an empty result with no headers at all.
+            holder["columns"] = [d[0] for d in (cursor.description or [])]
+            holder["rows"] = cursor.fetchall()
         except Exception as exc:  # noqa: BLE001
             holder["error"] = exc
         finally:
@@ -70,26 +77,20 @@ def _run_with_timeout(db_path: Path, sql: str, timeout_seconds: int = 15) -> lis
         raise QueryTimeoutError("Query timed out after %d seconds." % timeout_seconds)
     if holder["error"] is not None:
         raise holder["error"]
-    return holder["rows"]
+    return holder["columns"], holder["rows"]
 
 
 def _execute_sqlite(
     db_path: Optional[Path], safe_sql: str, max_rows: int, timeout_seconds: int
 ) -> tuple[list[str], list[list[Any]], bool]:
     try:
-        raw_rows = _run_with_timeout(db_path, safe_sql, timeout_seconds=timeout_seconds)
+        columns, raw_rows = _run_with_timeout(
+            db_path, safe_sql, timeout_seconds=timeout_seconds
+        )
     except QueryTimeoutError as exc:
         raise QueryExecutionError("timeout", str(exc)) from exc
     except sqlite3.Error as exc:
         raise QueryExecutionError("sql_error", sanitize_db_error(exc)) from exc
-
-    columns: list[str] = []
-    if raw_rows:
-        first = raw_rows[0]
-        if hasattr(first, "keys"):
-            columns = list(first.keys())
-        else:
-            columns = list(first) if isinstance(first, (tuple, list)) else []
 
     rows: list[list[Any]] = []
     truncated = False
@@ -142,13 +143,18 @@ def execute_read_only(
     from db.connections import POSTGRES_KIND
 
     settings = get_settings()
-    max_rows = max_rows or settings.hard_row_ceiling
+    # `max_rows` is the caller's own budget where it gave one (a table preview
+    # asks for 50), otherwise the configured default. `max_query_rows` was
+    # documented in .env.example but never read by anything — setting it had
+    # no effect at all. Either way the hard ceiling still wins.
+    max_rows = min(max_rows or settings.max_query_rows, settings.hard_row_ceiling)
     dialect = connection.dialect if connection is not None else "sqlite"
 
     # Validate in the dialect that will actually run the SQL, and always
     # enforce a cap even if the model already supplied one.
+    limit = max_rows
     validation = sql_guard.validate_sql(
-        sql, enforce_limit=True, max_rows=settings.hard_row_ceiling, dialect=dialect
+        sql, enforce_limit=True, max_rows=limit, dialect=dialect
     )
     if not validation.valid:
         raise QueryExecutionError(validation.error_type, validation.error_message)

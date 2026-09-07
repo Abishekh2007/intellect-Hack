@@ -31,6 +31,11 @@ MAX_RESULTS = 64
 # spot obvious outliers; short enough to stay cheap.
 PREVIEW_ROWS = 20
 
+# The key those rows travel under. Named to be read by the model as much as by
+# us — see the comment in `summarize` — and referenced by name in tests, so it
+# is defined once here rather than spelled out in three places.
+PREVIEW_KEY = "rows_for_your_reasoning_only"
+
 _lock = threading.Lock()
 _results: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 
@@ -106,15 +111,34 @@ def summarize(result: dict[str, Any], result_id: str) -> dict[str, Any]:
         "row_count": result.get("row_count", len(rows)),
         "truncated": result.get("truncated", False),
         "execution_time_ms": result.get("execution_time_ms"),
-        "preview_rows": preview,
+        # Deliberately not called "preview_rows". A key that reads like
+        # presentable output invites the model to present it, and smaller
+        # models reliably echoed `preview_rows` straight back into the answer
+        # as a key = value list. The name is now part of the instruction.
+        PREVIEW_KEY: preview,
+        # Stated as a fact rather than a rule: when the user can see every row
+        # already, restating them is redundant and the model can tell.
+        "rows_the_user_can_see": (
+            f"all {len(rows)}" if not result.get("truncated") else f"{len(rows)} (capped)"
+        ),
     }
     if len(rows) > len(preview):
         summary["preview_note"] = (
-            f"Showing the first {len(preview)} of {len(rows)} rows."
+            f"You were given the first {len(preview)} of {len(rows)} rows; the "
+            "user's table shows all of them."
         )
+    # The instruction lives here, beside the rows it governs. Stated only in
+    # the system prompt it was too far from the data to hold: the model would
+    # read `preview_rows` and mirror it straight back into the answer as a
+    # `category = Electronics, revenue = 63,589` block — the same rows the
+    # user already had on screen in the results table.
     summary["usage"] = (
-        "The full result is held server-side. Pass result_id to generate_chart "
-        "or explain_data — do not copy rows into those calls."
+        "These rows are for your reasoning only. The user is already looking "
+        "at the full result in a table, so do NOT reproduce them in your "
+        "answer — not as a table, a code block, a `key = value` list, or one "
+        "bullet per row. Quote only the two or three figures your point rests "
+        "on, inline in a sentence. Pass result_id to generate_chart or "
+        "explain_data rather than copying rows into those calls."
     )
     return summary
 

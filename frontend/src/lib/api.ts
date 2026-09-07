@@ -51,6 +51,14 @@ export type DashboardItem = {
   created_at?: string;
 };
 
+/* What the server reports after ingesting a CSV/XLSX/JSON/PDF/DOCX upload. */
+export type ImportedTable = {
+  table_name: string;
+  columns: string[];
+  row_count: number;
+  source: string;
+};
+
 export type DbConnection = {
   id: string;
   name: string;
@@ -161,7 +169,9 @@ export const api = {
   share: (sessionId: string, itemId?: string) =>
     json<{ share_id: string; url?: string }>(`${API_BASE}/share`, {
       method: "POST",
-      body: JSON.stringify(itemId ? { session_id: sessionId, item_id: itemId } : { session_id: sessionId }),
+      body: JSON.stringify(
+        itemId ? { session_id: sessionId, item_id: itemId } : { session_id: sessionId },
+      ),
     }),
   shared: (shareId: string) =>
     json<{ kind: string; title: string; payload: Record<string, unknown> }>(
@@ -206,13 +216,20 @@ export const api = {
     if (!res.ok) throw new Error(String(body?.detail ?? "Upload failed"));
     return body as { ok: boolean; connection?: DbConnection; tables?: string[] };
   },
-  uploadDataFile: async (file: File) => {
+  uploadDataFile: async (file: File, sessionId?: string | null) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(`${API_BASE}/upload-file`, { method: "POST", body: fd });
+    const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+    const res = await fetch(`${API_BASE}/upload-file${qs}`, { method: "POST", body: fd });
     const body = await res.json().catch(() => null);
     if (!res.ok) throw new Error(String(body?.detail ?? "Import failed"));
-    return body as { ok: boolean; info?: string };
+    /* `info` is an object, not a string. Typing it as a string meant callers
+       rendered it straight into JSX and React threw on the object. */
+    return body as {
+      ok: boolean;
+      info?: ImportedTable;
+      connection?: DbConnection;
+    };
   },
 };
 

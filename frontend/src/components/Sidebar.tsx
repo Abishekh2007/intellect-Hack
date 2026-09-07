@@ -4,7 +4,8 @@ import { useApp } from "@/lib/app-state";
 import { relativeTime } from "@/lib/api";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  const { sessions, sessionsLoading, activeSessionId, newChat, openSession, deleteSession } = useApp();
+  const { sessions, sessionsLoading, activeSessionId, newChat, openSession, deleteSession } =
+    useApp();
   const [confirming, setConfirming] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
@@ -65,9 +66,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 <li key={s.id}>
                   <div
                     className={`group flex items-center gap-2 rounded-xl px-2 py-2 transition-all duration-150 ${
-                      active
-                        ? "bg-primary/12 ring-1 ring-primary/25"
-                        : "hover:bg-accent/60"
+                      active ? "bg-primary/12 ring-1 ring-primary/25" : "hover:bg-accent/60"
                     }`}
                   >
                     <button
@@ -79,7 +78,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                     >
                       <span
                         className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                          active ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground"
+                          active
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-muted-foreground"
                         }`}
                       >
                         <MessageSquare size={13} />

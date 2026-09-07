@@ -45,9 +45,16 @@ FORBIDDEN_KEYWORDS = {
 
 _QUOTED_SPAN = re.compile(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"")
 
-# Look for keywords as whole words, but not after a period (table.column) or
-# inside an already-stripped quoted region.
-_KEYWORD_RE = re.compile(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE|GRANT|REVOKE|ATTACH|DETACH|PRAGMA|VACUUM|ANALYZE|LOAD|EXPLAIN)\b", re.IGNORECASE)
+# Keywords only mean danger in *statement* position — i.e. not followed by an
+# opening paren. REPLACE and ANALYZE are also ordinary scalar functions, so
+# matching them anywhere rejected valid read-only SQL such as
+# `SELECT REPLACE(name, 'a', 'b')`. The AST check is the real guard; this scan
+# is the belt to its braces, and a belt should not throttle the wearer.
+_KEYWORD_RE = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|ATTACH"
+    r"|DETACH|PRAGMA|VACUUM|LOAD|EXPLAIN)\b(?!\s*\()",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -83,11 +90,29 @@ def _strip_quoted(sql: str) -> str:
 
 
 def _split_statements(sql: str) -> list[str]:
-    """Split on semicolons, tolerating trailing whitespace and comments."""
-    # Remove line comments first (they may contain semicolons).
-    sql = re.sub(r"--[^\n]*", "", sql)
-    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
-    parts = [p.strip() for p in sql.split(";") if p.strip()]
+    """Split on semicolons that actually terminate a statement.
+
+    Comments and string literals are masked to spaces first so offsets still
+    line up with the original text. Splitting the raw string treated
+    ``WHERE name = 'a;b'`` as two statements and rejected a valid query.
+    """
+    masked = re.sub(r"--[^\n]*", lambda m: " " * len(m.group(0)), sql)
+    masked = re.sub(
+        r"/\*.*?\*/", lambda m: " " * len(m.group(0)), masked, flags=re.DOTALL
+    )
+    masked = _strip_quoted(masked)
+
+    parts: list[str] = []
+    start = 0
+    for i, ch in enumerate(masked):
+        if ch == ";":
+            chunk = sql[start:i].strip()
+            if chunk:
+                parts.append(chunk)
+            start = i + 1
+    tail = sql[start:].strip()
+    if tail:
+        parts.append(tail)
     return parts
 
 
@@ -105,12 +130,12 @@ def _statement_type(root: exp.Expression) -> str:
     return "other"
 
 
-def _contains_write(sql: str, dialect: str = "sqlite") -> bool:
-    """Recursively inspect AST for any non-read-only expression."""
-    try:
-        tree = sqlglot.parse_one(sql, read=dialect)
-    except Exception:
-        return True  # fail closed: unparseable == unsafe
+def _contains_write(tree: exp.Expression) -> bool:
+    """Recursively inspect an already-parsed AST for a non-read-only node.
+
+    Takes the tree rather than the SQL text: the caller has already parsed it,
+    and parsing twice doubled the cost of every query for no extra safety.
+    """
     for node in tree.walk():
         if isinstance(node, (exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Alter, exp.Create, exp.TruncateTable, exp.Merge, exp.Copy, exp.Command)):
             return True
@@ -159,7 +184,7 @@ def validate_sql(
     except Exception as exc:
         return ValidationResult.fail("parse_error", f"Could not parse the SQL query: {exc}")
 
-    if _contains_write(candidate, dialect):
+    if _contains_write(tree):
         return ValidationResult.fail(
             "unsafe_statement",
             "Only read-only queries (SELECT) are allowed. Write operations are blocked.",
@@ -205,41 +230,68 @@ def validate_sql(
     return ValidationResult.ok(final_sql, has_limit=has_limit or enforce_limit, limit_value=limit_value)
 
 
+def _outermost(tree: exp.Expression) -> exp.Expression:
+    """The statement whose LIMIT actually bounds the rows that come back.
+
+    Walking the whole tree also finds LIMITs inside subqueries and CTEs, and
+    one of those bounds nothing about the final result. Treating a subquery's
+    LIMIT as the row cap let ``SELECT * FROM (SELECT * FROM t LIMIT 5)`` run
+    with no ceiling at all — the guard reported a limit that wasn't there.
+    """
+    root = tree
+    if isinstance(root, exp.With):
+        root = root.this
+    return root
+
+
 def _detect_limit(tree: exp.Expression) -> bool:
-    for node in tree.walk():
-        if isinstance(node, exp.Limit):
-            return True
-    return False
+    return _outermost(tree).args.get("limit") is not None
 
 
 def _limit_value(tree: exp.Expression) -> Optional[int]:
-    for node in tree.walk():
-        if isinstance(node, exp.Limit) and isinstance(node.expression, exp.Literal):
-            try:
-                return int(node.expression.this)
-            except (ValueError, TypeError):
-                return None
-    return None
+    limit = _outermost(tree).args.get("limit")
+    if limit is None or not isinstance(limit.expression, exp.Literal):
+        return None
+    try:
+        return int(limit.expression.this)
+    except (ValueError, TypeError):
+        return None
 
 
 def _rewrite_with_limit(tree: exp.Expression, max_rows: int) -> exp.Expression:
-    """Inject or cap LIMIT on the outermost SELECT of the tree."""
-    root = tree
-    # WITH body: recurse to the contained select
-    if isinstance(root, exp.With):
-        root = root.this
-    if isinstance(root, exp.Union):
+    """Inject a LIMIT that bounds the whole result.
+
+    A bare ``WITH`` node is limited in place rather than replaced by its body:
+    returning the body alone dropped every CTE definition and emitted SQL
+    referring to tables that no longer existed.
+    """
+    if isinstance(tree, exp.Union):
         # Wrap the union in a select so LIMIT applies to the whole result.
-        root = exp.select(" * ").from_(exp.Subquery(this=root, alias="__u__"))
-    if isinstance(root, exp.Select):
-        root = root.limit(max_rows)
-    return root
+        return (
+            exp.select("*")
+            .from_(exp.Subquery(this=tree, alias="__u__"))
+            .limit(max_rows)
+        )
+    if isinstance(tree, exp.With):
+        body = tree.this
+        if isinstance(body, exp.Union):
+            body = exp.select("*").from_(exp.Subquery(this=body, alias="__u__"))
+        tree.set("this", body.limit(max_rows))
+        return tree
+    if isinstance(tree, exp.Select):
+        return tree.limit(max_rows)
+    return tree
 
 
 def sanitize_db_error(exc: Exception) -> str:
     """Return a user-safe error message that never leaks file paths."""
     msg = str(exc)
-    # Strip absolute paths and connection strings.
-    msg = re.sub(r"[A-Za-z]:\\[^\s'\"]+", "<path>", msg)
+    # Strip connection strings and absolute paths. POSIX paths matter as much
+    # as Windows ones: the app ships a Dockerfile, so most deployments are
+    # Linux, where the Windows-only pattern leaked the server's layout — and
+    # a Postgres URL carries a password, so it goes first.
+    msg = re.sub(r"postgres(?:ql)?(?:\+\w+)?://\S+", "<db>", msg, flags=re.IGNORECASE)
     msg = re.sub(r"file:[^\s'\"]+", "<db>", msg)
+    msg = re.sub(r"[A-Za-z]:[\\/][^\s'\"]+", "<path>", msg)
+    msg = re.sub(r"(?<![\w:])/(?:[\w.+-]+/)+[\w.+-]+", "<path>", msg)
     return msg[:500]

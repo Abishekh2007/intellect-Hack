@@ -37,11 +37,41 @@ class ExplainDataInput(BaseModel):
     context: str = Field(default="", description="Optional user question being answered.")
 
 
+def _as_number(value: Any) -> float | None:
+    """Parse a cell as a number, or None.
+
+    ``str.isdigit()`` rejects "-5", "1e3" and "1,200", so every negative value
+    was dropped before the sums were taken and a column of losses reported a
+    total of zero. Booleans are excluded: SQLite stores them as ints, and
+    averaging True/False produced a meaningless "average".
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().replace(",", ""))
+        except ValueError:
+            return None
+    return None
+
+
 def _aggregate(data: list[dict[str, Any]]) -> dict[str, Any]:
     if not data:
-        return {"count": 0}
+        return {"count": 0, "columns": [], "column_stats": {}}
     columns = list(data[0].keys())
-    stats: dict[str, Any] = {"count": len(data), "columns": columns}
+    # Per-column statistics live in their own namespace. They used to be
+    # written straight onto `stats`, so a result column called "count" — which
+    # `SELECT category, COUNT(*) AS count` produces constantly — overwrote the
+    # row count with a dict, and the summary read "The result contains
+    # {'sum': 14.0, ...} rows."
+    column_stats: dict[str, Any] = {}
+    stats: dict[str, Any] = {
+        "count": len(data),
+        "columns": columns,
+        "column_stats": column_stats,
+    }
     # Per-column statistics describe each column in isolation, which loses the
     # pairing between a label and its measure — without this the model can
     # report the top revenue figure but not which product earned it.
@@ -49,13 +79,12 @@ def _aggregate(data: list[dict[str, Any]]) -> dict[str, Any]:
     if len(data) > 5:
         stats["trailing_rows"] = data[-3:]
     for col in columns:
-        if col in ("leading_rows", "trailing_rows"):
-            continue
         values = [row.get(col) for row in data]
-        numeric = [v for v in values if isinstance(v, (int, float)) or (isinstance(v, str) and v.replace('.', '', 1).isdigit())]
-        if numeric:
-            nums = [float(v) for v in numeric]
-            stats[col] = {
+        nums = [n for n in (_as_number(v) for v in values) if n is not None]
+        # Only call a column numeric if most of it is; one stray number in a
+        # text column should not turn its summary into an average.
+        if nums and len(nums) >= max(1, len(values) * 0.6):
+            column_stats[col] = {
                 "sum": round(sum(nums), 2),
                 "avg": round(sum(nums) / len(nums), 2),
                 "min": round(min(nums), 2),
@@ -67,7 +96,7 @@ def _aggregate(data: list[dict[str, Any]]) -> dict[str, Any]:
                 key = str(v)
                 counts[key] = counts.get(key, 0) + 1
             top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
-            stats[col] = {"top_values": [{"value": k, "count": c} for k, c in top]}
+            column_stats[col] = {"top_values": [{"value": k, "count": c} for k, c in top]}
     return stats
 
 
@@ -75,8 +104,9 @@ def _fallback_explanation(stats: dict[str, Any], context: str) -> str:
     if not stats.get("count"):
         return "The query returned no rows, so there is nothing to explain."
     parts = [f"The result contains {stats['count']} rows."]
+    column_stats = stats.get("column_stats", {})
     for col in stats.get("columns", []):
-        detail = stats.get(col)
+        detail = column_stats.get(col)
         if not detail or not isinstance(detail, dict):
             continue
         if "sum" in detail:

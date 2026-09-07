@@ -170,7 +170,7 @@ class OpenAIProvider:
 class AnthropicProvider:
     name = "anthropic"
 
-    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, api_key: str, model: str = "claude-opus-5"):
         self.api_key = api_key
         self.model = model
 
@@ -340,7 +340,11 @@ class GeminiProvider:
             for chunk in response:
                 if not chunk.candidates:
                     continue
-                for part in chunk.candidates[0].content.parts:
+                content = getattr(chunk.candidates[0], "content", None)
+                # Gemini sends chunks whose content, or whose parts list, is
+                # null — a safety stop or a finish-reason-only chunk. Iterating
+                # that raised TypeError and the whole turn failed over.
+                for part in (getattr(content, "parts", None) or []):
                     if part.text:
                         yield {"type": "text", "text": part.text}
                     if part.function_call:

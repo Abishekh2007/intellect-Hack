@@ -11,7 +11,12 @@ import contextvars
 from typing import Any
 
 _current_session: contextvars.ContextVar[str] = contextvars.ContextVar("current_session", default="")
-_current_trace: contextvars.ContextVar[list[dict[str, Any]]] = contextvars.ContextVar("current_trace", default=[])
+# The default is None, not []. A mutable default is created once and shared by
+# every context that never calls set(), so trace() appended into one global
+# list that grew forever and mixed events from unrelated sessions together.
+_current_trace: contextvars.ContextVar[list[dict[str, Any]] | None] = contextvars.ContextVar(
+    "current_trace", default=None
+)
 
 
 class SessionScope:
@@ -36,8 +41,12 @@ def get_current_session_id() -> str:
 
 
 def get_current_trace() -> list[dict[str, Any]]:
-    return list(_current_trace.get())
+    return list(_current_trace.get() or [])
 
 
 def trace(event: str, payload: dict[str, Any] | None = None) -> None:
-    _current_trace.get().append({"event": event, **(payload or {})})
+    entries = _current_trace.get()
+    if entries is None:
+        entries = []
+        _current_trace.set(entries)
+    entries.append({"event": event, **(payload or {})})

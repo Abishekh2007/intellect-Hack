@@ -76,21 +76,23 @@ function SharedView() {
                 )}
                 {data.kind === "diagram" && (
                   <div className="panel">
-                    <DiagramView code={String((data.payload as { mermaid?: string }).mermaid ?? "")} />
+                    <DiagramView
+                      code={String((data.payload as { mermaid?: string }).mermaid ?? "")}
+                    />
                   </div>
                 )}
                 {data.kind === "dashboard" && (
                   <div className="grid gap-3 md:grid-cols-2">
-                    {(((data.payload as { items?: DashboardItem[] }).items ?? []) as DashboardItem[]).map(
-                      (item) => (
-                        <div key={item.id} className="panel overflow-hidden">
-                          <div className="border-b border-border px-3 py-2 text-xs font-semibold">
-                            {item.title}
-                          </div>
-                          <PinnedBody item={item} />
+                    {(
+                      ((data.payload as { items?: DashboardItem[] }).items ?? []) as DashboardItem[]
+                    ).map((item) => (
+                      <div key={item.id} className="panel overflow-hidden">
+                        <div className="border-b border-border px-3 py-2 text-xs font-semibold">
+                          {item.title}
                         </div>
-                      ),
-                    )}
+                        <PinnedBody item={item} />
+                      </div>
+                    ))}
                   </div>
                 )}
               </>

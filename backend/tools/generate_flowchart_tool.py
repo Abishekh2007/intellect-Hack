@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from db.connections import demo_connection
 from db.schema_discovery import discover_schema_for
-from tools.registry import ToolDefinition
+from tools.registry import ToolDefinition, ToolError
 from viz.mermaid_builder import build_decision_tree, build_er_diagram, build_flowchart
 
 
@@ -35,21 +35,36 @@ def _generate_flowchart_handler(args: GenerateFlowchartInput, context: dict[str,
         mermaid = build_er_diagram(discover_schema_for(connection))
         return {"diagram_type": "er", "mermaid": mermaid}
 
+    # Failures are raised, not returned. A returned {"error": ...} came back
+    # wrapped as a *successful* ToolResult, so the agent loop saw success, found
+    # no "mermaid" key, emitted nothing, and the model was never told what went
+    # wrong — the request simply vanished. ToolError reaches the model instead.
     if diagram_type == "process":
         steps = args.steps or []
         if not steps:
-            return {"error": "Process diagrams require a non-empty list of steps."}
+            raise ToolError(
+                "missing_steps",
+                "Process diagrams require a non-empty `steps` list. Pass the "
+                "ordered step labels and call generate_flowchart again.",
+            )
         mermaid = build_flowchart(steps, title=args.title)
         return {"diagram_type": "process", "mermaid": mermaid, "steps": steps}
 
     if diagram_type == "decision":
         nodes = args.nodes or []
         if not nodes:
-            return {"error": "Decision diagrams require node definitions."}
+            raise ToolError(
+                "missing_nodes",
+                "Decision diagrams require a non-empty `nodes` list of "
+                "{label, type, parent, edge} objects.",
+            )
         mermaid = build_decision_tree(nodes)
         return {"diagram_type": "decision", "mermaid": mermaid}
 
-    return {"error": f"Unknown diagram type: {diagram_type}. Use 'er', 'process' or 'decision'."}
+    raise ToolError(
+        "unknown_diagram_type",
+        f"Unknown diagram type {diagram_type!r}. Use 'er', 'process' or 'decision'.",
+    )
 
 
 generate_flowchart_tool = ToolDefinition(

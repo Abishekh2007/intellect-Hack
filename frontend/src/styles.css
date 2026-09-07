@@ -104,6 +104,16 @@
   --input: oklch(0.45 0.01 260 / 0.22);
   --ring: oklch(0.53 0.13 250);
   --code-bg: oklch(0.972 0.002 260);
+  /* State colours have to be re-tuned for a light ground. The :root values are
+     chosen to sit on a near-black background, and inheriting them here left
+     SQL text, warnings and success notes washed out to near-illegible on
+     white — the warning banner in particular was pale yellow on white. These
+     are the same hues held to a lightness that carries on paper. */
+  --violet: oklch(0.53 0.13 250);
+  --success: oklch(0.5 0.12 160);
+  --warning: oklch(0.52 0.11 70);
+  --info: oklch(0.48 0.12 245);
+  --destructive: oklch(0.55 0.19 25);
 }
 
 @layer base {
@@ -146,23 +156,47 @@
 }
 
 @keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
 }
 
 @keyframes shimmer {
-  0% { background-position: -200% center; }
-  100% { background-position: 200% center; }
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
 }
 
 @keyframes pulse-glow {
-  0%, 100% { opacity: 0.5; transform: scale(1); }
-  50% { opacity: 0.85; transform: scale(1.04); }
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.04);
+  }
 }
 
 @keyframes typing-dot {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-4px); opacity: 1; }
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }
 
 @utility panel {
@@ -210,6 +244,9 @@
 .typing-dot {
   animation: typing-dot 1.2s ease-in-out infinite;
 }
-.typing-dot:nth-child(2) { animation-delay: 0.15s; }
-.typing-dot:nth-child(3) { animation-delay: 0.3s; }
-
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}

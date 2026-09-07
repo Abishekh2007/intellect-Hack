@@ -36,7 +36,15 @@ type AppState = {
   deleteSession: (id: string) => Promise<void>;
   renameActive: (title: string) => Promise<void>;
   send: (message: string) => Promise<void>;
-  pin: (kind: "chart" | "diagram", title: string, payload: Record<string, unknown>) => Promise<void>;
+  /* Aborts the in-flight turn. The AbortController already existed but was
+     reachable only from `send` and `newChat`, so a long answer could not be
+     interrupted — the composer just stayed disabled until it finished. */
+  stop: () => void;
+  pin: (
+    kind: "chart" | "diagram",
+    title: string,
+    payload: Record<string, unknown>,
+  ) => Promise<void>;
   dashboardVersion: number;
   /* Bumped when the session switches database, so schema views refetch. */
   connectionVersion: number;
@@ -202,13 +210,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      const isFirst = thread.length === 0;
+      let isFirst = false;
       const assistantId = nextId();
-      setThread((prev) => [
-        ...prev,
-        { id: nextId(), role: "user", content: text, artifacts: [], done: true },
-        { id: assistantId, role: "assistant", content: "", artifacts: [] },
-      ]);
+      setThread((prev) => {
+        // Read the thread inside the updater rather than from the closure, so
+        // `send` no longer has to be rebuilt on every single message.
+        isFirst = prev.length === 0;
+        return [
+          ...prev,
+          { id: nextId(), role: "user", content: text, artifacts: [], done: true },
+          { id: assistantId, role: "assistant", content: "", artifacts: [] },
+        ];
+      });
       setIsStreaming(true);
       setStatusLabel("working");
 
@@ -233,7 +246,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 break;
               case "sql":
                 if (e.sql)
-                  patch((m) => ({ ...m, artifacts: [...m.artifacts, { kind: "sql", sql: e.sql! }] }));
+                  patch((m) => ({
+                    ...m,
+                    artifacts: [...m.artifacts, { kind: "sql", sql: e.sql! }],
+                  }));
                 break;
               case "table":
                 patch((m) => ({
@@ -262,7 +278,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 if (e.diagram)
                   patch((m) => ({
                     ...m,
-                    artifacts: [...m.artifacts, { kind: "diagram", diagram: e.diagram as DiagramSpec }],
+                    artifacts: [
+                      ...m.artifacts,
+                      { kind: "diagram", diagram: e.diagram as DiagramSpec },
+                    ],
                   }));
                 break;
               case "error":
@@ -273,14 +292,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 }));
                 break;
               case "final":
-                setMode(
+                /* Functional update: reading `mode` from the closure forced it
+                   into this callback's dependency list, which rebuilt `send`
+                   on every badge change and invalidated the chip handlers. */
+                setMode((prev) =>
                   e.mode === "offline"
                     ? "Offline engine"
                     : e.mode === "agent"
                       ? "AI agent"
                       : e.mode === "rule"
                         ? "Rule"
-                        : mode,
+                        : prev,
                 );
                 // The final event repeats every artifact the turn produced so
                 // the server can persist them. Agent mode has already streamed
@@ -295,7 +317,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     artifacts.push({ kind: "chart", chart: e.chart as ChartSpec });
                   if (e.diagram && !artifacts.some((a) => a.kind === "diagram"))
                     artifacts.push({ kind: "diagram", diagram: e.diagram as DiagramSpec });
-                  return { ...m, content: m.content || e.answer || e.text || "", artifacts, done: true };
+                  return {
+                    ...m,
+                    content: m.content || e.answer || e.text || "",
+                    artifacts,
+                    done: true,
+                  };
                 });
                 break;
               default:
@@ -326,8 +353,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [activeSessionId, thread.length, refreshSessions, mode],
+    [activeSessionId, refreshSessions],
   );
+
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
+    setStatusLabel(null);
+    setToolChip(null);
+    // Keep whatever streamed in and mark the turn closed, so the partial
+    // answer stays on screen instead of hanging with a spinner forever.
+    setThread((prev) =>
+      prev.map((m, i) =>
+        i === prev.length - 1 && m.role === "assistant" && !m.done
+          ? { ...m, done: true, content: m.content || "_Stopped._" }
+          : m,
+      ),
+    );
+  }, []);
 
   const pin = useCallback(
     async (kind: "chart" | "diagram", title: string, payload: Record<string, unknown>) => {
@@ -368,6 +412,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         deleteSession,
         renameActive,
         send,
+        stop,
         pin,
         dashboardVersion,
         connectionVersion,

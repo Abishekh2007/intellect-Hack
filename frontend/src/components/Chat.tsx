@@ -1,20 +1,75 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, SendHorizonal, Mic, MicOff } from "lucide-react";
+import {
+  BarChart3,
+  Check,
+  Copy,
+  Loader2,
+  Mic,
+  MicOff,
+  SendHorizonal,
+  Square,
+  TrendingUp,
+  Boxes,
+  Workflow,
+} from "lucide-react";
+import { toast } from "sonner";
 import { useApp } from "@/lib/app-state";
 import { ChartCard, DiagramCard, MarkdownText, SqlCard, TableCard } from "@/components/artifacts";
 import { Logo } from "@/components/Logo";
 import { useSpeechRecognition } from "@/hooks/use-speech";
 
 const CHIPS = [
-  "Top 5 products by revenue",
-  "Monthly revenue trend",
-  "Low stock products",
-  "Show me the ER diagram",
+  { label: "Top 5 products by revenue", icon: BarChart3 },
+  { label: "Monthly revenue trend", icon: TrendingUp },
+  { label: "Low stock products", icon: Boxes },
+  { label: "Show me the ER diagram", icon: Workflow },
 ];
 
+/* The backend emits machine-readable step names. Showing "inspecting_schema"
+   to a user leaked an implementation detail into the interface. */
+const STATUS_TEXT: Record<string, string> = {
+  inspecting_schema: "Reading the schema",
+  generating_plan: "Planning the query",
+  executing_tools: "Running tools",
+  working: "Working",
+  thinking: "Thinking",
+};
+
+const TOOL_TEXT: Record<string, string> = {
+  get_schema: "reading the schema",
+  execute_query: "running SQL",
+  generate_chart: "building a chart",
+  generate_flowchart: "drawing a diagram",
+  explain_data: "analysing the result",
+  verify_response: "checking the answer",
+};
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          toast.error("Clipboard unavailable.");
+        }
+      }}
+      title="Copy this answer"
+      aria-label="Copy this answer"
+      className="rounded-md p-1 text-muted-foreground opacity-0 transition-all hover:bg-secondary hover:text-foreground focus-visible:opacity-100 group-hover/msg:opacity-100"
+    >
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+    </button>
+  );
+}
+
 export function Chat() {
-  const { thread, isStreaming, statusLabel, toolChip, send, pin, backendOnline } = useApp();
-  const { isListening, transcript, startListening, stopListening, hasSupport, resetTranscript } = useSpeechRecognition();
+  const { thread, isStreaming, statusLabel, toolChip, send, stop, pin, backendOnline } = useApp();
+  const { isListening, transcript, startListening, stopListening, hasSupport, resetTranscript } =
+    useSpeechRecognition();
   const [typedValue, setTypedValue] = useState("");
   const displayValue = typedValue + (isListening && transcript ? " " + transcript : "");
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -23,7 +78,7 @@ export function Chat() {
 
   useEffect(() => {
     if (!isListening && transcript) {
-      setTypedValue(prev => (prev + " " + transcript).trim());
+      setTypedValue((prev) => (prev + " " + transcript).trim());
       resetTranscript();
     }
   }, [isListening, transcript, resetTranscript]);
@@ -68,15 +123,29 @@ export function Chat() {
       >
         <div className="mx-auto w-full max-w-3xl px-4 py-6">
           {thread.length === 0 ? (
-            <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 text-center">
-              <Logo size={36} />
-              <h1 className="text-xl font-semibold tracking-tight">
-                Ask anything about your database
-              </h1>
-              <p className="max-w-md text-sm text-muted-foreground">
-                DataPilot writes read-only SQL, returns tables, charts and diagrams — and remembers
-                the conversation.
-              </p>
+            <div className="flex min-h-[52vh] flex-col items-center justify-center gap-4 px-4 text-center">
+              <Logo size={40} />
+              <div className="space-y-2">
+                <h1 className="font-display text-2xl font-semibold tracking-tight">
+                  Ask anything about your database
+                </h1>
+                <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
+                  DataPilot writes read-only SQL, returns tables, charts and diagrams — and
+                  remembers the conversation.
+                </p>
+              </div>
+              <div className="mt-2 grid w-full max-w-lg grid-cols-1 gap-2 sm:grid-cols-2">
+                {CHIPS.map(({ label, icon: Icon }) => (
+                  <button
+                    key={label}
+                    onClick={() => send(label)}
+                    className="group flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-[13px] text-muted-foreground transition-all hover:-translate-y-px hover:border-primary/40 hover:text-foreground hover:shadow-[var(--shadow-card)] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Icon size={14} className="shrink-0 text-primary" />
+                    <span className="min-w-0 truncate">{label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="space-y-5">
@@ -88,16 +157,28 @@ export function Chat() {
                     </div>
                   </div>
                 ) : (
-                  <div key={m.id} className="flex justify-start">
+                  <div key={m.id} className="group/msg flex justify-start">
                     <div className="w-full max-w-[92%] space-y-3">
-                      <div className="px-4 py-3 text-[15px] text-foreground">
+                      <div className="relative px-1 py-1 text-[15px] text-foreground">
                         {m.content ? (
-                          <MarkdownText>{m.content}</MarkdownText>
+                          <>
+                            <MarkdownText>{m.content}</MarkdownText>
+                            {m.done && (
+                              <div className="mt-1 flex items-center gap-1">
+                                <CopyButton text={m.content} />
+                              </div>
+                            )}
+                          </>
                         ) : m.done ? (
                           <span className="text-sm text-muted-foreground">No answer returned.</span>
                         ) : (
                           <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                            <Loader2 size={14} className="animate-spin" /> Generating…
+                            <span className="flex gap-1">
+                              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-current" />
+                              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-current" />
+                              <span className="typing-dot h-1.5 w-1.5 rounded-full bg-current" />
+                            </span>
+                            Generating…
                           </span>
                         )}
                       </div>
@@ -125,7 +206,9 @@ export function Chat() {
                             onPin={() =>
                               pin(
                                 "diagram",
-                                a.diagram.type === "er" ? "ER Diagram" : a.diagram.type || "Diagram",
+                                a.diagram.type === "er"
+                                  ? "ER Diagram"
+                                  : a.diagram.type || "Diagram",
                                 a.diagram as unknown as Record<string, unknown>,
                               )
                             }
@@ -146,30 +229,26 @@ export function Chat() {
         </div>
       </div>
 
-      <div className="shrink-0 bg-background px-4 py-3">
+      <div className="shrink-0 border-t border-border/60 bg-background px-4 py-3">
         <div className="mx-auto w-full max-w-3xl space-y-2">
-          {toolChip && (
-            <div className="text-[11px] text-info">using tool: {toolChip}</div>
-          )}
-          {statusLabel && (
-            <div className="inline-flex items-center gap-2 text-[11px] text-muted-foreground">
-              <Loader2 size={12} className="animate-spin" /> Thinking… {statusLabel}
+          {(statusLabel || toolChip) && (
+            <div className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              <Loader2 size={12} className="shrink-0 animate-spin text-primary" />
+              <span>{STATUS_TEXT[statusLabel ?? ""] ?? "Working"}</span>
+              {toolChip && (
+                <span className="truncate rounded-full bg-secondary px-2 py-0.5 text-[10.5px] text-info">
+                  {TOOL_TEXT[toolChip] ?? toolChip}
+                </span>
+              )}
+              <button
+                onClick={stop}
+                className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Square size={9} className="fill-current" /> Stop
+              </button>
             </div>
           )}
-          {thread.length === 0 && (
-            <div className="flex flex-wrap gap-2">
-              {CHIPS.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => send(c)}
-                  className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="flex items-end gap-2 rounded-lg border border-input bg-surface px-3 py-2 focus-within:border-ring">
+          <div className="flex items-end gap-2 rounded-xl border border-input bg-surface px-3 py-2 transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/25">
             <textarea
               ref={taRef}
               rows={1}
@@ -185,6 +264,7 @@ export function Chat() {
                 }
               }}
               placeholder="Ask about your data, e.g. Top 5 products by revenue"
+              aria-label="Message"
               className="max-h-[150px] flex-1 resize-none bg-transparent py-1.5 text-[15px] outline-none placeholder:text-muted-foreground"
             />
             {hasSupport && (
@@ -200,19 +280,34 @@ export function Chat() {
                 {isListening ? <MicOff size={16} /> : <Mic size={16} />}
               </button>
             )}
-            <button
-              onClick={submit}
-              disabled={isStreaming || !displayValue.trim()}
-              title={backendOnline === false ? "Backend appears offline" : "Send"}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-            >
-              {isStreaming ? (
-                <Loader2 size={16} className="animate-spin" />
-              ) : (
+            {/* While a turn is streaming this becomes the stop control, so
+                the primary button is never a dead spinner. */}
+            {isStreaming ? (
+              <button
+                onClick={stop}
+                title="Stop generating"
+                aria-label="Stop generating"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-destructive text-destructive-foreground transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Square size={12} className="fill-current" />
+              </button>
+            ) : (
+              <button
+                onClick={submit}
+                disabled={!displayValue.trim()}
+                title={backendOnline === false ? "Backend appears offline" : "Send"}
+                aria-label="Send message"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+              >
                 <SendHorizonal size={16} />
-              )}
-            </button>
+              </button>
+            )}
           </div>
+          <p className="px-1 pt-1.5 text-[10.5px] text-muted-foreground/70">
+            Read-only SQL · Enter to send, Shift + Enter for a new line ·{" "}
+            <kbd className="rounded border border-border px-1 py-px font-sans">Ctrl</kbd>
+            <kbd className="rounded border border-border px-1 py-px font-sans">K</kbd> for commands
+          </p>
         </div>
       </div>
     </section>

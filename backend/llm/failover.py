@@ -13,6 +13,7 @@ import logging
 
 from config import get_settings
 from llm.base import AllProvidersFailed, ProviderError
+from llm.bedrock import BedrockProvider
 from llm.clients import AnthropicProvider, GeminiProvider, OpenAIProvider
 
 
@@ -24,7 +25,7 @@ def build_providers(settings=None) -> list[Any]:
         return settings._is_real_key(key)
 
     # User-configured priority, then sensible defaults.
-    order = [settings.llm_provider.lower(), "gemini", "openai", "anthropic"]
+    order = [settings.llm_provider.lower(), "bedrock", "gemini", "openai", "anthropic"]
     built: dict[str, Any] = {}
     if _is_real(settings.gemini_api_key):
         built["gemini"] = GeminiProvider(settings.gemini_api_key, settings.gemini_model)
@@ -32,6 +33,10 @@ def build_providers(settings=None) -> list[Any]:
         built["openai"] = OpenAIProvider(settings.openai_api_key, settings.openai_model, settings.openai_base_url)
     if _is_real(settings.anthropic_api_key):
         built["anthropic"] = AnthropicProvider(settings.anthropic_api_key, settings.anthropic_model)
+    if _is_real(settings.bedrock_api_key):
+        built["bedrock"] = BedrockProvider(
+            settings.bedrock_api_key, settings.bedrock_model, settings.bedrock_region
+        )
 
     for name in order:
         if name in built and name not in [p.name for p in providers]:
@@ -62,12 +67,22 @@ class FailoverProvider:
     def stream_tool_calls(self, messages, tools, system_prompt):
         errors: list[str] = []
         for provider in self.providers:
+            emitted = False
             try:
-                yield from provider.stream_tool_calls(messages, tools, system_prompt)
+                for event in provider.stream_tool_calls(messages, tools, system_prompt):
+                    emitted = True
+                    yield event
                 return
             except ProviderError as exc:
-                logging.error(f"Provider {provider.name} failed: {exc.message}", exc_info=True)
+                logging.error(
+                    "Provider %s failed: %s", provider.name, exc.message, exc_info=True
+                )
                 errors.append(f"{provider.name}: {exc.message}")
+                if emitted:
+                    # Half a turn is already on the wire. Restarting on the next
+                    # provider would replay its opening text on top of what the
+                    # user is reading, so stop here and let the caller recover.
+                    raise AllProvidersFailed("; ".join(errors)) from exc
                 continue
         raise AllProvidersFailed("; ".join(errors))
 

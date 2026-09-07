@@ -39,7 +39,16 @@ export function chartPalette(theme: Theme) {
         tooltipBg: "#27272a",
         // Exported images need a plain hex: canvas cannot fill with oklch().
         exportBg: "#212326",
-        series: ["#6b93d6", "#7fae9b", "#c2a267", "#b58a8a", "#8f8ab5", "#6fa3a3", "#a89a7c", "#8aa0b8"],
+        series: [
+          "#6b93d6",
+          "#7fae9b",
+          "#c2a267",
+          "#b58a8a",
+          "#8f8ab5",
+          "#6fa3a3",
+          "#a89a7c",
+          "#8aa0b8",
+        ],
       }
     : {
         text: "#52525b",
@@ -47,6 +56,15 @@ export function chartPalette(theme: Theme) {
         split: "rgba(82,82,91,0.09)",
         tooltipBg: "#ffffff",
         exportBg: "#ffffff",
-        series: ["#41689f", "#4f806c", "#8a6d33", "#9c5f5f", "#63608c", "#417070", "#7a6b44", "#5b7085"],
+        series: [
+          "#41689f",
+          "#4f806c",
+          "#8a6d33",
+          "#9c5f5f",
+          "#63608c",
+          "#417070",
+          "#7a6b44",
+          "#5b7085",
+        ],
       };
 }

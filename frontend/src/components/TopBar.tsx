@@ -91,9 +91,7 @@ export function TopBar({
           }
           className="hidden sm:inline-flex"
           title={
-            backendOnline === false
-              ? "Can't reach the API on port 8000"
-              : `Answering with: ${mode}`
+            backendOnline === false ? "Can't reach the API on port 8000" : `Answering with: ${mode}`
           }
         />
         <button

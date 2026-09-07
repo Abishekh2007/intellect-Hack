@@ -217,8 +217,8 @@ def test_execute_query_returns_a_reference_not_a_row_dump(settings):
     )["data"]
     assert "result_id" in payload
     assert "rows" not in payload, "raw rows are back in the model-facing payload"
-    assert payload["preview_rows"], "the model needs some rows to reason about shape"
-    assert len(payload["preview_rows"]) <= result_store.PREVIEW_ROWS
+    assert payload[result_store.PREVIEW_KEY], "the model needs some rows to reason about shape"
+    assert len(payload[result_store.PREVIEW_KEY]) <= result_store.PREVIEW_ROWS
 
 
 def test_charts_cover_the_whole_result_not_just_the_preview(settings):
@@ -231,7 +231,7 @@ def test_charts_cover_the_whole_result_not_just_the_preview(settings):
         ctx,
     )["data"]
     stored = result_store.get(payload["result_id"])
-    assert stored["row_count"] > len(payload["preview_rows"]), "test needs a result past the preview"
+    assert stored["row_count"] > len(payload[result_store.PREVIEW_KEY]), "test needs a result past the preview"
 
     chart = registry.dispatch(
         "generate_chart", {"result_id": payload["result_id"]}, ctx
@@ -298,7 +298,35 @@ def test_statistics_keep_label_to_measure_pairings(settings):
     data = [{"product": "A", "revenue": 30}, {"product": "B", "revenue": 20}]
     stats = registry.dispatch("explain_data", {"data": data}, ctx)["data"]["statistics"]
     assert stats["leading_rows"][0] == {"product": "A", "revenue": 30}
-    assert stats["revenue"]["sum"] == 50
+    assert stats["column_stats"]["revenue"]["sum"] == 50
+
+
+def test_a_column_named_count_does_not_clobber_the_row_count(settings):
+    """Per-column stats live under `column_stats`, not beside the row count.
+
+    Writing them onto the top level meant `SELECT category, COUNT(*) AS count`
+    — an everyday query — replaced the integer row count with a stats dict,
+    and the summary read "The result contains {'sum': 14.0, ...} rows."
+    """
+    registry, ctx = _registry_and_ctx(settings)
+    data = [{"category": "Books", "count": 10}, {"category": "Toys", "count": 4}]
+    out = registry.dispatch("explain_data", {"data": data}, ctx)["data"]
+    assert out["statistics"]["count"] == 2
+    assert out["statistics"]["column_stats"]["count"]["sum"] == 14
+    assert "The result contains 2 rows." in out["grounded_summary"]
+
+
+def test_statistics_include_negative_values(settings):
+    """`str.isdigit()` rejects "-5", so losses were dropped before summing."""
+    registry, ctx = _registry_and_ctx(settings)
+    data = [{"month": "2024-01", "profit": -500}, {"month": "2024-02", "profit": 1500}]
+    stats = registry.dispatch("explain_data", {"data": data}, ctx)["data"]["statistics"]
+    assert stats["column_stats"]["profit"] == {
+        "sum": 1000.0,
+        "avg": 500.0,
+        "min": -500.0,
+        "max": 1500.0,
+    }
 
 
 # --- BUG-09: the agent remembers what the sidebar shows --------------------

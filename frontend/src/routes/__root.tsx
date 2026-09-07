@@ -74,7 +74,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "DataPilot AI" },
-      { name: "description", content: "Chat with your database: SQL, tables, charts and diagrams." },
+      {
+        name: "description",
+        content: "Chat with your database: SQL, tables, charts and diagrams.",
+      },
       { name: "author", content: "DataPilot" },
       { property: "og:title", content: "DataPilot AI" },
       {

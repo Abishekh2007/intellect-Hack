@@ -1,104 +1,193 @@
-import { useEffect, useState } from "react";
-import { Star, Play, Terminal } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Star, Play, Terminal, RefreshCw, Copy, Check, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { IconButton } from "./artifacts";
 import { useApp } from "@/lib/app-state";
-import { api, type QueryHistoryItem } from "@/lib/api";
+import { api, relativeTime, type QueryHistoryItem } from "@/lib/api";
+
+/* Only poll while the tab is actually visible. The old five-second interval
+   ran for the life of the page — in a background tab, on a closed panel,
+   forever — which is a request every five seconds for a list nobody is
+   reading. */
+const POLL_MS = 8000;
 
 export function QueryHistory() {
   const [queries, setQueries] = useState<QueryHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const { send } = useApp();
+  const [error, setError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const { send, isStreaming } = useApp();
+  const mounted = useRef(true);
 
-  const fetchQueries = async () => {
+  const fetchQueries = useCallback(async () => {
     try {
-      setQueries(await api.listQueries());
+      const rows = await api.listQueries();
+      if (!mounted.current) return;
+      setQueries(Array.isArray(rows) ? rows : []);
+      setError(null);
     } catch (e) {
-      console.error(e);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchQueries();
-    
-    // Simple polling to keep it updated when new queries are run
-    const interval = setInterval(fetchQueries, 5000);
-    return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    mounted.current = true;
+    fetchQueries();
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer === null) timer = setInterval(fetchQueries, POLL_MS);
+    };
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibility = () => (document.hidden ? stop() : (fetchQueries(), start()));
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      mounted.current = false;
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [fetchQueries]);
+
   const toggleFavorite = async (id: string) => {
+    // Optimistic: the star should respond to the click, not to the round trip.
+    const previous = queries;
+    setQueries((prev) =>
+      prev.map((q) => (q.id === id ? { ...q, is_favorite: !q.is_favorite } : q)),
+    );
     try {
       const { is_favorite } = await api.toggleQueryFavorite(id);
       setQueries((prev) => prev.map((q) => (q.id === id ? { ...q, is_favorite } : q)));
-    } catch (e) {
-      console.error(e);
+    } catch {
+      setQueries(previous);
+      toast.error("Couldn't update that query.");
+    }
+  };
+
+  const copy = async (item: QueryHistoryItem) => {
+    try {
+      await navigator.clipboard.writeText(item.sql);
+      setCopiedId(item.id);
+      setTimeout(() => setCopiedId((c) => (c === item.id ? null : c)), 1500);
+    } catch {
+      toast.error("Clipboard unavailable.");
     }
   };
 
   if (loading) {
-    return <div className="p-4 text-center text-xs text-muted-foreground">Loading history...</div>;
-  }
-
-  if (queries.length === 0) {
     return (
-      <div className="flex h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
-        <Terminal size={24} className="opacity-20" />
-        <p className="text-xs">No queries run yet.</p>
+      <div className="space-y-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-20 animate-pulse rounded-lg bg-secondary"
+            style={{ animationDelay: `${i * 80}ms` }}
+          />
+        ))}
       </div>
     );
   }
 
-  // Sort favorites to the top
+  if (error) {
+    return (
+      <div className="panel space-y-2 px-4 py-6 text-center">
+        <p className="text-xs text-destructive">Couldn't load the query log.</p>
+        <IconButton onClick={fetchQueries}>
+          <RefreshCw size={12} /> Retry
+        </IconButton>
+      </div>
+    );
+  }
+
+  if (queries.length === 0) {
+    return (
+      <div className="panel flex flex-col items-center justify-center gap-2 px-4 py-10 text-center">
+        <Terminal size={22} className="text-muted-foreground opacity-30" />
+        <p className="text-xs text-muted-foreground">No queries run yet.</p>
+        <p className="max-w-[14rem] text-[11px] text-muted-foreground/70">
+          Every SQL statement the agent runs is logged here. Star the ones worth keeping.
+        </p>
+      </div>
+    );
+  }
+
+  /* Favourites first, then most recent. The previous comparator returned 0 for
+     equal favourite flags, leaving the server's ordering to break the tie. */
   const sorted = [...queries].sort((a, b) => {
-    if (a.is_favorite === b.is_favorite) return 0;
-    return a.is_favorite ? -1 : 1;
+    if (a.is_favorite !== b.is_favorite) return a.is_favorite ? -1 : 1;
+    return (b.created_at ?? "").localeCompare(a.created_at ?? "");
   });
+  const starred = sorted.filter((q) => q.is_favorite).length;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="border-b border-border p-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Query Log
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Query log
+        </span>
+        <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {queries.length}
+          {starred > 0 && ` · ${starred} ★`}
+        </span>
+        <button
+          onClick={fetchQueries}
+          aria-label="Refresh query log"
+          className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          <RefreshCw size={12} />
+        </button>
       </div>
-      <div className="scroll-thin flex-1 overflow-y-auto p-2 space-y-2">
-        {sorted.map((q) => (
-          <div
-            key={q.id}
-            className="group relative flex flex-col gap-2 rounded-lg border border-border bg-surface p-3 transition-colors hover:bg-accent/30"
-          >
-            <div className="flex items-start justify-between">
-              <pre className="scroll-thin max-h-32 overflow-x-auto text-[11px] leading-relaxed text-info font-mono whitespace-pre-wrap flex-1 mr-2">
-                {q.sql}
-              </pre>
-              <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                <IconButton
-                  title="Run again"
-                  onClick={() => send(`Run this query again:\n\n${q.sql}`)}
-                >
-                  <Play size={12} />
-                </IconButton>
-                <IconButton
-                  title={q.is_favorite ? "Unstar" : "Star"}
-                  onClick={() => toggleFavorite(q.id)}
-                >
-                  <Star size={12} className={q.is_favorite ? "fill-warning text-warning" : ""} />
-                </IconButton>
-              </div>
-            </div>
-            
-            {/* Show star persistently if it is a favorite */}
-            {q.is_favorite && (
-               <div className="absolute top-2 right-2 group-hover:hidden">
-                 <Star size={12} className="fill-warning text-warning" />
-               </div>
-            )}
-            
-            <div className="text-[10px] text-muted-foreground">
-              {new Date(q.created_at).toLocaleString()}
+
+      {sorted.map((q) => (
+        <div
+          key={q.id}
+          className={`group rounded-lg border bg-surface p-2.5 transition-colors ${
+            q.is_favorite
+              ? "border-warning/40 hover:border-warning/60"
+              : "border-border hover:border-primary/30"
+          }`}
+        >
+          <pre className="scroll-thin max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-info">
+            {q.sql}
+          </pre>
+          <div className="mt-2 flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground">{relativeTime(q.created_at)}</span>
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                onClick={() => toggleFavorite(q.id)}
+                title={q.is_favorite ? "Remove star" : "Star this query"}
+                aria-pressed={q.is_favorite}
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-warning"
+              >
+                <Star size={12} className={q.is_favorite ? "fill-warning text-warning" : ""} />
+              </button>
+              <button
+                onClick={() => copy(q)}
+                title="Copy SQL"
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                {copiedId === q.id ? <Check size={12} /> : <Copy size={12} />}
+              </button>
+              <button
+                onClick={() => send(`Run this query and explain the result:\n\n${q.sql}`)}
+                disabled={isStreaming}
+                title={isStreaming ? "Wait for the current answer" : "Run this query again"}
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
+              >
+                {isStreaming ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+              </button>
             </div>
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }

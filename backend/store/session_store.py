@@ -17,16 +17,34 @@ from config import get_settings
 
 _lock = threading.Lock()
 _db_path: Path | None = None
+_initialized = False
 
 
 def _conn() -> sqlite3.Connection:
-    global _db_path
+    """Open a connection, creating the schema once per process.
+
+    `_init` used to run on every single call: six CREATE TABLE IF NOT EXISTS
+    statements, a PRAGMA, a migration check and a commit before every message
+    read and write. The schema cannot change while the process is alive, so
+    the work was pure overhead on the hottest path in the app.
+    """
+    global _db_path, _initialized
     settings = get_settings()
     _db_path = _db_path or (settings.db_path.parent / "datapilot_chat.db")
+    _db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_db_path))
     conn.row_factory = sqlite3.Row
-    _init(conn)
+    if not _initialized:
+        _init(conn)
+        _initialized = True
     return conn
+
+
+def reset_for_tests() -> None:
+    """Forget the cached path and schema flag (tests point at a temp file)."""
+    global _db_path, _initialized
+    _db_path = None
+    _initialized = False
 
 
 def _init(conn: sqlite3.Connection) -> None:

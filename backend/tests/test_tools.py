@@ -95,9 +95,22 @@ def test_generate_flowchart_process(registry, ctx):
 
 
 def test_generate_flowchart_bad_type(registry, ctx):
+    """A bad request is a tool *failure*, not a success carrying an error key.
+
+    Returned as a success, the agent loop found no "mermaid" in the payload,
+    emitted nothing, and told the model nothing — the request disappeared with
+    no diagram and no explanation. As a ToolError the model can correct itself.
+    """
     result = registry.dispatch("generate_flowchart", {"diagram_type": "nope"}, ctx)
-    assert result["success"] is True
-    assert "error" in result["data"]
+    assert result["success"] is False
+    assert result["error"]["type"] == "unknown_diagram_type"
+    assert result["error"]["recoverable"] is True
+
+
+def test_generate_flowchart_missing_steps_is_recoverable(registry, ctx):
+    result = registry.dispatch("generate_flowchart", {"diagram_type": "process"}, ctx)
+    assert result["success"] is False
+    assert result["error"]["type"] == "missing_steps"
 
 
 def test_explain_data_computes_stats(registry, ctx):

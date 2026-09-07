@@ -69,6 +69,9 @@ OPENAI_API_KEY=sk-...          # or any OpenAI-compatible endpoint
 # OPENAI_BASE_URL=https://...  # e.g. DeepSeek, Groq, Together
 ANTHROPIC_API_KEY=sk-ant-...
 GEMINI_API_KEY=...
+BEDROCK_API_KEY=ABSK...        # Amazon Bedrock API key (bearer token, no SigV4)
+# BEDROCK_MODEL=qwen.qwen3-next-80b-a3b
+# BEDROCK_REGION=us-east-1
 ```
 
 **With no key at all the app still works.** A built-in offline engine classifies the
@@ -169,7 +172,7 @@ Run one read-only `SELECT` and park the result server-side.
 | | |
 | --- | --- |
 | **Input** | `query: str` — a single read-only SELECT |
-| **Returns** | `{ result_id, sql, columns, column_types, row_count, truncated, execution_time_ms, preview_rows }` |
+| **Returns** | `{ result_id, sql, columns, column_types, row_count, truncated, execution_time_ms, rows_for_your_reasoning_only }` — a bounded row sample, deliberately named so the model treats it as working data rather than output to reprint |
 | **Errors** | `unsafe_statement`, `multi_statement`, `forbidden_keyword`, `limit_too_high`, `parse_error`, `timeout`, `sql_error` — all recoverable, so the model reads the message and corrects itself |
 
 ### `generate_chart`
@@ -313,7 +316,7 @@ Alongside those:
 
 ```bash
 cd backend
-python -m pytest -q          # 125 tests
+python -m pytest -q          # 157 tests
 ```
 
 Coverage includes the SQL guard's bypass attempts, the tool registry and every
