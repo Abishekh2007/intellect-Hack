@@ -55,6 +55,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# ---------- Local-only assets ----------
+# Slide deck kept locally, not part of the shipped project.
+/ppt/
+
 # ---------- OS / editor ----------
 .DS_Store
 Thumbs.db
