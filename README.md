@@ -11,9 +11,6 @@ Type a question. The agent inspects the live schema, writes a **read-only** SQL 
 runs it behind five layers of safety checks, picks a chart type that suits the data,
 and explains what the numbers mean — streaming every step to the browser as it happens.
 
-**Live demo:** <https://intellect-hack-2026.vercel.app/>
-
----
 
 ## Quick start
 
